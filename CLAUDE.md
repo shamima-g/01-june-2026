@@ -142,9 +142,16 @@ Use `Read` / `Grep` / `Glob` / `Edit` / `Write` for file content — never `cat`
 
 Tests verify **user-observable behavior**, not implementation. Conventions, the Vitest/Playwright/manual split, anti-patterns, budgets, and `test.fixme()` policy live in [.claude/policies/testing-policy.md](.claude/policies/testing-policy.md) — the single source of truth.
 
+### 13. Record Build Timing (Active Time Only)
+
+Throughout the entire project — every phase, every `/clear`, every session — build timing is recorded so the time taken to build the project (per phase and sub-phase, **excluding manual-intervention time**) can be reported. This is mostly automatic: the `record-timing.ps1` hook appends lifecycle events to `generated-docs/timing/timing-ledger.jsonl` (append-only, survives `/clear`), and `node .claude/scripts/generate-timing-report.js` produces `generated-docs/timing/timing-report.md`.
+
+Run the report generator at COMPLETE and whenever the user asks for build timing. The full mechanism, the active-vs-manual model, and the manual-fallback ledger protocol live in [.claude/policies/timing-policy.md](.claude/policies/timing-policy.md) — the single source of truth.
+
 ## Policies
 
 - [Authentication Intake](.claude/policies/authentication-intake.md) — auth options are presented explicitly during INTAKE; never inferred or skipped
 - [BFF Auth Pattern](.claude/policies/bff-auth-pattern.md) — security and Next.js integration shape for BFF auth stories
 - [Compliance Intake](.claude/policies/compliance-intake.md) — compliance domains are surfaced as a blocking question during INTAKE
 - [Styling Centralisation](.claude/policies/styling-centralisation.md) — all colours/fonts/spacing reference tokens in `globals.css`; no hex literals in components
+- [Build Timing](.claude/policies/timing-policy.md) — per-phase / per-sub-phase timing is recorded throughout the build, excluding manual-intervention time; report via `generate-timing-report.js`
