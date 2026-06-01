@@ -1,0 +1,633 @@
+name: Quality Gates
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - "feature/**"
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+      - master
+      - "feature/**"
+
+# Required permissions for PR comments and status checks
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  # Job 1: Setup - Install dependencies with caching
+  setup:
+    name: Setup & Install Dependencies
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: web/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('web/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+  # Gate 2: Security - npm audit and secret scanning
+  security:
+    name: 'Gate 2: Security'
+    runs-on: ubuntu-latest
+    needs: setup
+    outputs:
+      npm-audit-result: ${{ steps.npm-audit.outcome }}
+      secret-scan-result: ${{ steps.secret-patterns.outputs.secret_scan_result }}
+      security-patterns-result: ${{ steps.security-patterns.outcome }}
+      security-summary: ${{ steps.security-summary.outputs.summary }}
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for TruffleHog scanning
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit (production dependencies only)
+        run: npm audit --production --audit-level=high
+        continue-on-error: true
+        id: npm-audit
+
+      - name: Check for secrets in code
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --only-verified
+
+      - name: Scan for hardcoded secrets (regex patterns)
+        id: secret-patterns
+        working-directory: .
+        run: |
+          bash .github/scripts/scan-secrets.sh --dir web
+          echo "secret_scan_result=passed" >> $GITHUB_OUTPUT
+        # If scan-secrets.sh exits 1, the step fails and the output is not set —
+        # which is the desired behaviour (block the PR).
+
+      - name: Run security pattern validation
+        run: node ../.github/scripts/security-validator.js
+        continue-on-error: false
+        id: security-patterns
+
+      - name: Security Report
+        if: always()
+        id: security-summary
+        run: |
+          echo "### Security Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Build summary for PR comment
+          SUMMARY="## 🔒 Security Gate Results\n\n"
+
+          if [ "${{ steps.npm-audit.outcome }}" == "success" ]; then
+            echo "✅ npm audit: No high-severity vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+            SUMMARY="${SUMMARY}✅ **npm audit**: No high-severity vulnerabilities\n"
+          else
+            echo "⚠️ npm audit: Vulnerabilities detected (see logs above)" >> $GITHUB_STEP_SUMMARY
+            SUMMARY="${SUMMARY}⚠️ **npm audit**: Vulnerabilities detected\n"
+          fi
+
+          echo "✅ TruffleHog secret scanning: Complete" >> $GITHUB_STEP_SUMMARY
+          SUMMARY="${SUMMARY}✅ **TruffleHog**: Secret scanning complete\n"
+
+          if [ "${{ steps.secret-patterns.outcome }}" == "success" ]; then
+            echo "✅ Hardcoded secrets scan: No secrets found" >> $GITHUB_STEP_SUMMARY
+            SUMMARY="${SUMMARY}✅ **Hardcoded secrets scan**: No secrets found\n"
+          else
+            echo "❌ Hardcoded secrets scan: Potential secrets detected (see logs above)" >> $GITHUB_STEP_SUMMARY
+            SUMMARY="${SUMMARY}❌ **Hardcoded secrets scan**: Potential secrets detected\n"
+          fi
+
+          if [ "${{ steps.security-patterns.outcome }}" == "success" ]; then
+            echo "✅ Security pattern validation: Passed" >> $GITHUB_STEP_SUMMARY
+            SUMMARY="${SUMMARY}✅ **Security patterns**: Validation passed\n"
+          else
+            echo "❌ Security pattern validation: Issues found (see logs above)" >> $GITHUB_STEP_SUMMARY
+            SUMMARY="${SUMMARY}❌ **Security patterns**: Issues found\n"
+          fi
+
+          # Output summary for PR comment (escape newlines for GitHub output)
+          echo "summary<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post Security Results to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commentIdentifier = '<!-- quality-gate-security -->';
+            const body = `${commentIdentifier}
+            ## 🔒 Security Gate Results
+
+            | Check | Status |
+            |-------|--------|
+            | npm audit | ${{ steps.npm-audit.outcome == 'success' && '✅ Pass' || '⚠️ Vulnerabilities detected' }} |
+            | TruffleHog | ✅ Scanned |
+            | Hardcoded secrets | ${{ steps.secret-patterns.outcome == 'success' && '✅ Pass' || '❌ Potential secrets found' }} |
+            | Security patterns | ${{ steps.security-patterns.outcome == 'success' && '✅ Pass' || '❌ Issues found' }} |
+
+            <details>
+            <summary>What was checked</summary>
+
+            - **npm audit**: Scans production dependencies for high-severity vulnerabilities
+            - **TruffleHog**: Scans git history for leaked secrets
+            - **Hardcoded secrets**: Regex patterns for API keys, passwords, AWS keys, tokens
+            - **Security patterns**: RBAC, input validation, and secure coding practices
+
+            </details>
+
+            ---
+            *Updated: ${new Date().toISOString()}*
+            `;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.find(comment =>
+              comment.body.includes(commentIdentifier)
+            );
+
+            if (existingComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: body,
+              });
+              console.log('Updated existing security comment');
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+              console.log('Created new security comment');
+            }
+
+  # Gate 3: Code Quality - TypeScript, ESLint, Prettier, Build
+  code-quality:
+    name: 'Gate 3: Code Quality'
+    runs-on: ubuntu-latest
+    needs: setup
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript check
+        run: |
+          if ! npx tsc --noEmit; then
+            echo "::error title=TypeScript Error::Type checking failed. Please fix the TypeScript errors above."
+            exit 1
+          fi
+        id: typescript
+
+      - name: Run ESLint
+        run: |
+          if ! npm run lint; then
+            echo "::error title=ESLint Error::Linting failed. Please fix the ESLint errors above."
+            exit 1
+          fi
+        id: eslint
+
+      - name: Run Prettier check
+        run: |
+          if ! npm run format:check; then
+            echo "::error title=Prettier Error::Code formatting check failed. Run 'npm run format' to fix formatting issues."
+            exit 1
+          fi
+        id: prettier
+
+      - name: Build production bundle
+        run: |
+          if ! npm run build; then
+            echo "::error title=Build Error::Production build failed. Please fix the build errors above."
+            exit 1
+          fi
+        id: build
+
+      - name: Code Quality Report
+        if: always()
+        run: |
+          echo "### Code Quality Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| TypeScript | ${{ steps.typescript.outcome == 'success' && 'Pass' || 'Fail' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ESLint | ${{ steps.eslint.outcome == 'success' && 'Pass' || 'Fail' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Prettier | ${{ steps.prettier.outcome == 'success' && 'Pass' || 'Fail' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ steps.build.outcome == 'success' && 'Pass' || 'Fail' }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Post Code Quality Results to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commentIdentifier = '<!-- quality-gate-code-quality -->';
+            const body = `${commentIdentifier}
+            ## 🔍 Code Quality Gate Results
+
+            | Check | Status |
+            |-------|--------|
+            | TypeScript | ${{ steps.typescript.outcome == 'success' && '✅ Pass' || '❌ Type errors found' }} |
+            | ESLint | ${{ steps.eslint.outcome == 'success' && '✅ Pass' || '❌ Lint errors found' }} |
+            | Prettier | ${{ steps.prettier.outcome == 'success' && '✅ Pass' || '❌ Formatting issues' }} |
+            | Build | ${{ steps.build.outcome == 'success' && '✅ Pass' || '❌ Build failed' }} |
+
+            <details>
+            <summary>What was checked</summary>
+
+            - **TypeScript**: Strict type checking with \`tsc --noEmit\`
+            - **ESLint**: Code linting with Next.js recommended rules
+            - **Prettier**: Code formatting consistency
+            - **Build**: Production build compilation
+
+            </details>
+
+            ---
+            *Updated: ${new Date().toISOString()}*
+            `;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.find(comment =>
+              comment.body.includes(commentIdentifier)
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: body,
+              });
+              console.log('Updated existing code quality comment');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+              console.log('Created new code quality comment');
+            }
+
+  # Gate 4: Testing - Vitest tests (multi-Node version)
+  testing:
+    name: 'Gate 4: Testing (Node ${{ matrix.node-version }})'
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      matrix:
+        node-version: [22]
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test quality check
+        if: matrix.node-version == 22
+        run: |
+          if ! npm run test:quality; then
+            echo "::error title=Test Quality Failure::Test files contain anti-patterns (testing implementation details). See output above for specific issues."
+            exit 1
+          fi
+        id: test-quality
+
+      - name: Run Vitest tests
+        run: |
+          if ! npm test -- --coverage; then
+            echo "::error title=Test Failure::Vitest tests failed on Node ${{ matrix.node-version }}. Check the test output above for details."
+            exit 1
+          fi
+        env:
+          CI: true
+        id: vitest
+
+      - name: Upload coverage report
+        if: always() && matrix.node-version == 22
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: web/coverage/
+          retention-days: 30
+
+      - name: Testing Report
+        if: always()
+        run: |
+          echo "### Testing Gate Results (Node ${{ matrix.node-version }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.vitest.outcome }}" == "success" ]; then
+            echo "All Vitest tests passed on Node ${{ matrix.node-version }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Some tests failed on Node ${{ matrix.node-version }} - check the uploaded coverage report" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Post Testing Results to PR
+        if: always() && github.event_name == 'pull_request' && matrix.node-version == 22
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commentIdentifier = '<!-- quality-gate-testing -->';
+            const body = `${commentIdentifier}
+            ## 🧪 Testing Gate Results
+
+            | Node Version | Status |
+            |--------------|--------|
+            | Node 22 | ${{ steps.vitest.outcome == 'success' && '✅ All tests passed' || '❌ Tests failed' }} |
+
+            <details>
+            <summary>Test details</summary>
+
+            - **Framework**: Vitest with React Testing Library
+            - **Coverage**: Report uploaded as artifact
+            - **Node version**: Tests run on Node 22 LTS
+
+            </details>
+
+            ---
+            *Updated: ${new Date().toISOString()}*
+            `;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.find(comment =>
+              comment.body.includes(commentIdentifier)
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: body,
+              });
+              console.log('Updated existing testing comment');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+              console.log('Created new testing comment');
+            }
+
+  # Gate 5: Performance - Lighthouse CI
+  performance:
+    name: 'Gate 5: Performance'
+    runs-on: ubuntu-latest
+    needs: code-quality
+    defaults:
+      run:
+        working-directory: web
+    env:
+      # CI has no real backend. Without this flag, BFF implementations redirect
+      # to the external auth server and Lighthouse dies with CHROME_INTERSTITIAL_ERROR.
+      # To audit a real staging deployment instead, drop this flag and set
+      # LIGHTHOUSE_TARGET_URL (see web/lighthouserc.js).
+      NEXT_PUBLIC_USE_MOCK_API: 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Start production server
+        run: npm run start &
+
+      - name: Wait for server to be ready
+        run: |
+          echo "Waiting for server to be ready..."
+          for i in {1..30}; do
+            if curl -s http://localhost:3000 > /dev/null; then
+              echo "Server is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30 - Server not ready yet, waiting..."
+            sleep 2
+          done
+          echo "Server failed to start within 60 seconds"
+          exit 1
+
+      - name: Run Lighthouse CI
+        run: |
+          if ! npx lhci autorun; then
+            echo "::error title=Performance Failure::Lighthouse CI failed. Performance, accessibility, or best practices scores are below thresholds."
+            exit 1
+          fi
+        id: lighthouse
+
+      - name: Upload Lighthouse reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-reports
+          path: .lighthouseci/
+          retention-days: 30
+
+      - name: Post Performance Results to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commentIdentifier = '<!-- quality-gate-performance -->';
+            const lighthouseStatus = '${{ steps.lighthouse.outcome }}';
+            const passed = lighthouseStatus === 'success';
+
+            const body = `${commentIdentifier}
+            ## ⚡ Performance Gate Results
+
+            | Metric | Threshold | Status |
+            |--------|-----------|--------|
+            | Performance | > 80 | ${passed ? '✅ Pass' : '❌ Below threshold'} |
+            | Accessibility | > 90 | ${passed ? '✅ Pass' : '❌ Below threshold'} |
+            | Best Practices | > 80 | ${passed ? '✅ Pass' : '❌ Below threshold'} |
+
+            **Overall**: ${passed ? '✅ All Lighthouse checks passed' : '❌ Lighthouse checks failed'}
+
+            <details>
+            <summary>What was checked</summary>
+
+            - **Performance**: Core Web Vitals, loading speed, interactivity
+            - **Accessibility**: WCAG compliance, screen reader support
+            - **Best Practices**: Security, modern web standards
+
+            📊 Full Lighthouse report available in workflow artifacts
+
+            </details>
+
+            ---
+            *Updated: ${new Date().toISOString()}*
+            `;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.find(comment =>
+              comment.body.includes(commentIdentifier)
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: body,
+              });
+              console.log('Updated existing performance comment');
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+              console.log('Created new performance comment');
+            }
+
+  # Summary job that depends on all gates
+  quality-gates-summary:
+    name: Quality Gates Summary
+    runs-on: ubuntu-latest
+    needs: [security, code-quality, testing, performance]
+    if: always()
+    steps:
+      - name: Check all gates passed
+        run: |
+          echo "### Quality Gates Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Gate | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Security | ${{ needs.security.result == 'success' && '✅ Pass' || '❌ Fail' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality | ${{ needs.code-quality.result == 'success' && '✅ Pass' || '❌ Fail' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Testing | ${{ needs.testing.result == 'success' && '✅ Pass' || '❌ Fail' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance | ${{ needs.performance.result == 'success' && '✅ Pass' || '❌ Fail' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          FAILED_GATES=""
+
+          if [ "${{ needs.security.result }}" != "success" ]; then
+            FAILED_GATES="${FAILED_GATES}Security, "
+            echo "::error title=Security Gate Failed::Security checks did not pass. Review the Security job for details."
+          fi
+
+          if [ "${{ needs.code-quality.result }}" != "success" ]; then
+            FAILED_GATES="${FAILED_GATES}Code Quality, "
+            echo "::error title=Code Quality Gate Failed::Code quality checks did not pass. Review TypeScript, ESLint, Prettier, or Build errors."
+          fi
+
+          if [ "${{ needs.testing.result }}" != "success" ]; then
+            FAILED_GATES="${FAILED_GATES}Testing, "
+            echo "::error title=Testing Gate Failed::Tests did not pass. Review the Testing job for failed test details."
+          fi
+
+          if [ "${{ needs.performance.result }}" != "success" ]; then
+            FAILED_GATES="${FAILED_GATES}Performance, "
+            echo "::error title=Performance Gate Failed::Performance checks did not pass. Lighthouse scores are below thresholds."
+          fi
+
+          if [ -n "$FAILED_GATES" ]; then
+            # Remove trailing comma and space
+            FAILED_GATES="${FAILED_GATES%, }"
+            echo "**❌ Failed gates: ${FAILED_GATES}**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Please fix the issues above before merging." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "**✅ All quality gates passed! This PR is ready for review.**" >> $GITHUB_STEP_SUMMARY
+          fi

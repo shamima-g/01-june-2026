@@ -1,0 +1,18 @@
+# Used by .github/workflows/publish-template.yml
+
+# Template maintainer documentation
+.template-docs/template-maintainers/
+
+# Release infrastructure (self-referential)
+.release-ignore
+.github/workflows/publish-template.yml
+
+# Template-dev test files (not needed by end users)
+.claude/**/*.tests.js
+
+# Each repo maintains its own README independently
+/README.md
+
+# Safety net: generated-docs should be empty folders in release
+generated-docs/**/*.md
+generated-docs/**/*.html

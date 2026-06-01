@@ -1,0 +1,43 @@
+# Files listed here are NOT synced from the template.
+# See .template-docs/users/Help/Template-Sync.md for details.
+
+# User application code (review CHANGELOG.md for template /web updates)
+web/
+
+# User-specific configurations
+.env
+.env.local
+.env.*.local
+
+# Project-specific documentation
+documentation/
+
+# Generated files
+generated-docs/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Don't prefix with a leading slash — actions-template-sync's ignore-file
+# handler treats `/README.md` as an absolute filesystem path and errors.
+# Each repo owns its own README, so we exclude it from sync.
+README.md
+
+# GitHub Actions workflow files. GitHub blocks the default GITHUB_TOKEN from
+# pushing changes to .github/workflows/ files — a security policy that prevents
+# a workflow from rewriting other workflows on the repo. With the current
+# PAT-based sync setup the destination push uses GITHUB_TOKEN, so it cannot
+# touch workflow files. We exclude the whole directory rather than fight that
+# limitation; consumers update workflow files manually when needed (see
+# .template-docs/Help/Template-Sync.md). This restriction will be lifted when
+# sync moves to a GitHub App that can hold workflows:write.
+.github/workflows/
+
+# Template-maintainer-only files. The release channel (Digiata/Stadium-8) strips
+# these via .release-ignore, but the dev-build channel (stadium-software/stadium-8)
+# does not — listing them here ensures they never land in a user repo regardless
+# of source, and also acts as a safety net if .release-ignore is ever incomplete.
+.template-docs/template-maintainers/
+.release-ignore
+.claude/**/*.tests.js

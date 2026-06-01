@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$comment": "Source of truth for filename conventions of AI-generated documents. Read by .claude/hooks/enforce-generated-doc-names.js (PreToolUse enforcement) and .claude/scripts/validate-generated-doc-names.js (repo-wide audit). Human-readable mirror: .claude/shared/naming-conventions.md",
+  "version": 1,
+  "matching": {
+    "description": "Each convention is considered in scope for a file when its dirGlob matches the file's parent directory. A file is OK for a convention when its basename matches filenamePattern. A file is DRIFT for a convention when its basename matches badPattern but NOT filenamePattern. If no convention classes the file as OK or DRIFT, it is ungoverned and ignored."
+  },
+  "conventions": [
+    {
+      "id": "epic-overview",
+      "writtenBy": "/continue (orchestrator, after Gate 2 stories approval)",
+      "dirGlob": "generated-docs/stories/epic-*/",
+      "filenamePattern": "^_epic-overview\\.md$",
+      "badPattern": "^epic-overview\\.md$",
+      "example": "_epic-overview.md",
+      "counterexample": "epic-overview.md",
+      "rationale": "Leading underscore keeps the overview sorted above any story files in directory listings. Exact filename; no per-epic suffix."
+    },
+    {
+      "id": "feature-overview",
+      "writtenBy": "/continue (orchestrator, after Gate 2a epic-list approval)",
+      "dirGlob": "generated-docs/stories/",
+      "filenamePattern": "^_feature-overview\\.md$",
+      "badPattern": "^feature-overview\\.md$",
+      "example": "_feature-overview.md",
+      "counterexample": "feature-overview.md",
+      "rationale": "Dashboard and progress scripts read this exact filename to enumerate epics; they silently fall back to a no-epic-progress display if it's elsewhere."
+    },
+    {
+      "id": "e2e-spec",
+      "writtenBy": "test-generator",
+      "dirGlob": "web/e2e/",
+      "filenamePattern": "^epic-\\d+-story-\\d+-[a-z][a-z0-9-]*\\.spec\\.ts$",
+      "badPattern": "^story-\\d+-[a-z0-9-]+\\.spec\\.ts$",
+      "example": "epic-1-story-3-role-aware-nav.spec.ts",
+      "counterexample": "story-3-role-aware-nav.spec.ts",
+      "rationale": "E2E specs live in a flat directory. orchestrator-rules.md:518 globs them as epic-<N>-story-<M>-*.spec.ts — both numbers are required for the E2E Verification step to resolve the combined target set."
+    }
+  ]
+}

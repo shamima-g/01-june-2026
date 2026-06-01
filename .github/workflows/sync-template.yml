@@ -1,0 +1,136 @@
+name: Sync from Template
+
+on:
+  workflow_dispatch: # Manual trigger only — see .template-docs/Help/Template-Sync.md
+
+jobs:
+  sync:
+    name: Sync with Template Repository
+    # Skip runs inside the template source repos themselves — they are sync
+    # sources, not sync consumers.
+    if: >-
+      github.repository != 'stadium-software/stadium-8' &&
+      github.repository != 'Digiata/Stadium-8'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      SOURCE: ${{ vars.TEMPLATE_SOURCE_REPO || 'stadium-software/stadium-8' }}
+    steps:
+      - name: Check credentials and source access
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.TEMPLATE_SYNC_PAT }}
+        run: |
+          set -euo pipefail
+          # A non-zero exit from `gh repo view` can mean any of: invalid/expired
+          # token, token lacks access to the source, source renamed/deleted, or a
+          # transient outage. We can't reliably distinguish these from CI, so we
+          # lump them under `source-unreachable` and let the issue body list the
+          # likely causes in order of probability — better than falsely blaming
+          # the token during a GitHub incident.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            REASON="no-credentials"
+          elif gh repo view "$SOURCE" >/dev/null 2>&1; then
+            REASON="ready"
+          else
+            REASON="source-unreachable"
+          fi
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          echo "Readiness: $REASON"
+
+      - name: Open action-required issue (if not already open)
+        if: steps.check.outputs.reason != 'ready'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REASON: ${{ steps.check.outputs.reason }}
+          ASSIGNEE: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          case "$REASON" in
+            no-credentials)
+              BODY=$(cat <<EOF
+          Template sync can't run because no credentials are configured.
+
+          **What to do:** Generate a fine-grained Personal Access Token (PAT) with \`Contents: read\` on \`$SOURCE\`, then add it to this repo's secrets as \`TEMPLATE_SYNC_PAT\`.
+
+          Full setup instructions: see \`.template-docs/Help/Template-Sync.md\` in this repo.
+
+          Close this issue once you've added the secret. The next manual sync run will pick it up.
+          EOF
+          )
+              ;;
+            source-unreachable)
+              BODY=$(cat <<EOF
+          Template sync can't read the template source (\`$SOURCE\`). This usually means one of the following:
+
+          1. **Your \`TEMPLATE_SYNC_PAT\` is expired, invalid, or lacks access to the source.** Most common. Generate a fresh fine-grained PAT with \`Contents: read\` on \`$SOURCE\` and update the \`TEMPLATE_SYNC_PAT\` repo secret (Settings → Secrets and variables → Actions).
+          2. **Transient GitHub issue** (outage, rate limit). Retry the sync in a few minutes.
+          3. **The source repo has been renamed or moved.** If you've set \`TEMPLATE_SOURCE_REPO\` as a repo variable, confirm it still points at the right \`<owner>/<repo>\`.
+
+          See \`.template-docs/Help/Template-Sync.md\` for step-by-step instructions.
+
+          Close this issue once resolved. The next manual sync run will pick up the new state.
+          EOF
+          )
+              ;;
+          esac
+
+          # Hidden reason marker — survives title/body wording changes and is what we match on for dedup.
+          MARKER="<!-- template-sync-reason: $REASON -->"
+          BODY="$BODY"$'\n\n'"$MARKER"
+          TITLE="Template sync: action required"
+          LABEL="template-sync-action-required"
+
+          existing_json=$(gh issue list \
+            --label "$LABEL" \
+            --state open \
+            --limit 1 \
+            --json number,body)
+          existing=$(echo "$existing_json" | jq -r '.[0].number // ""')
+          existing_body=$(echo "$existing_json" | jq -r '.[0].body // ""')
+
+          if [ -n "$existing" ]; then
+            if echo "$existing_body" | grep -qF "$MARKER"; then
+              echo "Issue #$existing already open with the same reason ($REASON) — skipping."
+            else
+              # Rewrite the body so the issue always reflects the current cause,
+              # rather than stacking a comment on top of now-stale advice.
+              gh issue edit "$existing" --body "$BODY"
+              echo "Issue #$existing was open for a different reason — updated body to new reason ($REASON)."
+            fi
+            exit 0
+          fi
+
+          gh label create "$LABEL" \
+            --description "Template sync needs attention from the repo owner" \
+            --color "d93f0b" \
+            --force
+
+          gh issue create \
+            --title "$TITLE" \
+            --label "$LABEL" \
+            --assignee "$ASSIGNEE" \
+            --body "$BODY"
+
+      - name: Checkout code
+        if: steps.check.outputs.reason == 'ready'
+        uses: actions/checkout@v4
+        with:
+          # actions-template-sync sets up its own git auth via `gh auth setup-git`;
+          # a persisted GITHUB_TOKEN duplicates that and GitHub's git server
+          # rejects the duplicate Authorization headers with HTTP 400.
+          persist-credentials: false
+
+      - name: Sync from template
+        if: steps.check.outputs.reason == 'ready'
+        uses: AndreasAugustin/actions-template-sync@v2.5.2
+        with:
+          source_repo_path: ${{ env.SOURCE }}
+          upstream_branch: main
+          pr_title: 'chore: sync with template repository'
+          pr_labels: template-sync
+          source_gh_token: ${{ secrets.TEMPLATE_SYNC_PAT }}

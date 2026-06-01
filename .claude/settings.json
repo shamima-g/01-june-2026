@@ -1,0 +1,246 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Read(*/.ssh/*)",
+      "Read(*.ssh/*)",
+      "Bash(*cat*id_rsa*)",
+      "Bash(*cat*.pem)",
+      "Bash(*cat*credentials*)",
+      "Bash(*type*id_rsa*)",
+      "Bash(*type*.pem)",
+      "Bash(*type*credentials*)",
+      "Bash(*Get-Content*id_rsa*)",
+      "Bash(*Get-Content*.pem*)",
+      "Bash(*Get-Content*credentials*)",
+      "Bash(*sed*id_rsa*)",
+      "Bash(*sed*.pem*)",
+      "Bash(*sed*credentials*)"
+    ],
+    "allow": [
+      "mcp__shadcn-ui__*",
+      "Read(documentation/**)",
+      "Read(**/documentation/**)",
+      "Read(generated-docs/**)",
+      "Read(**/generated-docs/**)",
+      "Write(generated-docs/**)",
+      "Write(**/generated-docs/**)",
+      "Edit(generated-docs/**)",
+      "Edit(**/generated-docs/**)",
+      "Read(web/**)",
+      "Read(**/web/**)",
+      "Glob(web/**)",
+      "Glob(**/web/**)",
+      "Glob(documentation/**)",
+      "Glob(**/documentation/**)",
+      "Glob(generated-docs/**)",
+      "Glob(**/generated-docs/**)",
+      "Glob(.claude/**)",
+      "Glob(**/.claude/**)",
+      "Write(web/**)",
+      "Write(**/web/**)",
+      "Edit(web/**)",
+      "Edit(**/web/**)",
+      "Bash(npx playwright test*)",
+      "Bash(npx playwright install*)",
+      "Bash(npx playwright --version)",
+      "Bash(npm run test:e2e*)",
+      "Bash(node .claude/scripts/*.js*)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType prompt",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/workflow-guard.ps1\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType session_start",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/inject-phase-context.ps1\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType session_end",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType permission_request",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType subagent_start",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "developer|test-generator|code-reviewer|feature-planner|design-api-agent|design-style-agent|intake-agent|api-connectivity-agent|playwright-runner|mock-setup-agent|type-generator-agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/inject-agent-context.ps1\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType subagent_stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType pre_compact",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType response",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \".claude/hooks/bash-permission-checker.js\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \".claude/hooks/claude-md-permission-checker.js\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \".claude/hooks/enforce-generated-doc-names.js\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType pre_tool_use",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType post_tool_use",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType notification",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
