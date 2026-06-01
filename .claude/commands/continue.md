@@ -538,15 +538,36 @@ After the manual-test gate resolves (passed / skipped / legacy), check if more e
 
 There are two entry paths here:
 
-1. **Just finished the last epic** — Step B7.2 transitioned to COMPLETE and `featureComplete` isn't yet `true`. Mark it, emit the congratulations one-liner, and stop:
+1. **Just finished the last epic** — Step B7.2 transitioned to COMPLETE and `featureComplete` isn't yet `true`. Mark it, generate and commit the build-timing report, emit the congratulations one-liner, and stop:
 
-   ```bash
-   node .claude/scripts/transition-phase.js --feature-complete --verify-output
-   ```
+   a. **Mark the feature complete:**
 
-   ```
-   [Feature name] is fully implemented and committed. [Total commits] commits across [N] epics.
-   ```
+      ```bash
+      node .claude/scripts/transition-phase.js --feature-complete --verify-output
+      ```
+
+   b. **Generate the build-timing report** (per [Critical Rule 13](../../CLAUDE.md) / [timing-policy.md](../policies/timing-policy.md)). This reads the full append-only ledger and overwrites `generated-docs/timing/timing-report.md` so it covers the entire build, every phase, across all `/clear`s and sessions:
+
+      ```bash
+      node .claude/scripts/generate-timing-report.js
+      ```
+
+      Verify `status: "ok"`. If the ledger is missing/empty (e.g. timing hook never fired), note it and continue — do not block COMPLETE on timing.
+
+   c. **Commit the timing artifacts** (ledger + report) so the final timing lands in git:
+
+      ```bash
+      git add generated-docs/timing/timing-ledger.jsonl generated-docs/timing/timing-report.md .claude/logs/
+      git commit -m "chore(timing): final build-timing report at feature completion"
+      git push origin HEAD
+      ```
+
+   d. **Emit the congratulations one-liner**, including the headline active build time from the report:
+
+      ```
+      [Feature name] is fully implemented and committed. [Total commits] commits across [N] epics.
+      Active build time: [Active build time from timing-report.md] (manual-intervention time excluded). Full breakdown: generated-docs/timing/timing-report.md
+      ```
 
    Stop here. `/continue` re-entered later picks up Path 2 below.
 

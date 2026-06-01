@@ -40,11 +40,16 @@ This is captured automatically; it does not rely on Claude remembering.
    - BUILD active time per story;
    - a cross-check against `workflow-state.json` → `state.history[]` phase boundaries.
 
-   Run it at COMPLETE, and whenever the user asks for build timing:
+   Run it whenever the user asks for build timing:
 
    ```
    node .claude/scripts/generate-timing-report.js
    ```
+
+   At **COMPLETE**, the orchestrator runs it automatically and commits the artifacts
+   (ledger + report) — see Path 1 of the COMPLETE phase in
+   [commands/continue.md](../commands/continue.md). The congratulations one-liner
+   reports the headline active build time and points to the report.
 
 ## Active vs manual — the classification rule
 

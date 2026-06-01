@@ -542,3 +542,339 @@ Yes commit
 
 ---
 
+
+#### Permission Request - 2026-06-01 11:25Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+_**Agent (model claude-opus-4-8)**_
+
+I'm on `main`. Let me check status and create a branch before committing.
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: PowerShell_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: PowerShell_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+The ledger already has 294 bytes â€” the hook is working and captured this setup session's events (all `UNKNOWN` phase since the project isn't initialized). I'll commit the **tooling** but leave the ledger itself uncommitted so your real build starts with clean timing data. I'll add a `.gitkeep` so the directory is tracked.
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: Write_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: PowerShell_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+The ledger is correctly left untracked. Now commit:
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: PowerShell_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+Committed on a new branch `feature/build-timing` (commit `10a79aa`, 8 files).
+
+Summary of what landed:
+- **Tooling:** [record-timing.ps1](.claude/hooks/record-timing.ps1), [generate-timing-report.js](.claude/scripts/generate-timing-report.js), hook wiring in [settings.json](.claude/settings.json)
+- **Docs/rules:** Rule 13 in [CLAUDE.md](CLAUDE.md), [timing-policy.md](.claude/policies/timing-policy.md), [timing.md](timing.md)
+- **Tracked dir:** `generated-docs/timing/.gitkeep`
+- Session log included per Rule 1.
+
+Intentionally **not** committed: `generated-docs/timing/timing-ledger.jsonl` â€” left untracked so your real build starts with clean timing data. It'll begin accumulating real, phase-tagged events once you run `/start`, and you can commit it as the build progresses.
+
+I branched off `main` rather than committing directly to it. Want me to push `feature/build-timing` and open a PR, or leave it local?
+
+---
+
+
+_**User: shamima-g (2026-06-01 11:25Z)**_
+
+So I will have a report of the time taken at the end of the project.  Where will you be saving this report?
+
+
+_**Agent (model claude-opus-4-8)**_
+
+Yes. The report is saved to:
+
+**`generated-docs/timing/timing-report.md`**
+
+(full path: `c:\TestsArchives\stadium8-tests\01-june-2026\generated-docs\timing\timing-report.md`)
+
+A few details on how it gets there:
+
+- It's **generated on demand** by running `node .claude/scripts/generate-timing-report.js` â€” per Rule 13, that runs automatically at the COMPLETE phase, and any time you ask for build timing.
+- Each run **overwrites** the file with a fresh snapshot computed from the full ledger (`generated-docs/timing/timing-ledger.jsonl`), so the version at the end of the project reflects the entire build start-to-finish â€” no matter how many `/clear`s or sessions happened in between.
+- It sits right next to its data source in `generated-docs/timing/`, which is a Write-allowed path, so no permission prompts.
+
+What the final report contains: total wall-clock, manual-intervention time (excluded), **active build time**, a per-phase table (INTAKE/PLAN/BUILD/COMPLETE), a per-sub-phase table (test-generation, development, review, e2e, â€¦), per-story BUILD time, and a cross-check against `workflow-state.json` history.
+
+One thing to decide: that report file is currently **untracked** (I only committed a `.gitkeep` for the directory, not generated output). If you want the final report committed into git as a project artifact, I can either commit it manually when it's produced, or wire the COMPLETE step to commit it automatically. Want me to set that up?
+
+---
+
+
+_**User: shamima-g (2026-06-01 11:26Z)**_
+
+What time will be ommited as per instructions?
+
+
+_**Agent (model claude-opus-4-8)**_
+
+Per the rule, the report **omits manual-intervention time** â€” defined precisely as any interval that *follows* a point where Claude stopped and handed control back to you. In the implementation, an interval is omitted when its starting event is one of: `response` (Stop), `session_end`, or `session_start`.
+
+Concretely, the omitted (excluded) spans are:
+
+1. **Think / typing time** â€” from when Claude finishes a reply until you send your next prompt (the gap after every `response`). This is the big one.
+2. **Gate approvals & manual verification** â€” while Claude is waiting on you to approve a gate or manually verify a story, it's idle â†’ omitted.
+3. **Answering clarifying questions** â€” the wait between Claude asking and you answering.
+4. **`/clear` gaps and between-session breaks** â€” time after `session_end`/`session_start` until activity resumes (e.g. you close Claude overnight, or reset context mid-build).
+
+What is **counted as active** (NOT omitted): everything from your prompt until Claude stops â€” all of Claude's processing, tool calls, and subagent runs (test-generation, development, review, e2e). Subagent spans are timed directly via `subagent_start â†’ subagent_stop`.
+
+So the final number is:
+
+> **Active build time = total wall-clock âˆ’ (all the waiting-on-you spans above)**
+
+The report shows all three figures side by side â€” total wall-clock, the manual time that was excluded, and the resulting active build time â€” so the exclusion is transparent and auditable, not hidden.
+
+One honest caveat about granularity: the boundary is per **conversation turn**, not per keystroke. If you ask Claude something and then walk away for an hour while it's mid-work, that hour counts as active (Claude was "working" on that turn from the system's view). The omission is reliable for the *waiting-on-you* gaps between turns, which is where virtually all manual-intervention time actually accumulates.
+
+---
+
+
+_**User: shamima-g (2026-06-01 11:28Z)**_
+
+What is the boundary is per conversation turn, not per keystroke.
+
+
+_**Agent (model claude-opus-4-8)**_
+
+Good question â€” let me unpack that caveat, because it explains the one situation where the "omit manual time" rule isn't perfect.
+
+## What the system can actually "see"
+
+The timing hook only fires on discrete lifecycle events â€” it gets a timestamp at each of these moments:
+
+- you **submit a prompt** (`UserPromptSubmit`)
+- Claude **finishes replying** (`Stop`)
+- a **subagent starts / stops**
+- a **session starts / ends**
+
+It does **not** see anything in between. It can't tell whether, during a 10-minute gap, you were actively reading Claude's output, typing, thinking, or away getting coffee. It only knows: "event A happened at 11:00:00, event B happened at 11:10:00."
+
+So a "turn" = the span between two of those events. That's the smallest unit the system can measure. Keystroke-level or second-by-second activity is invisible to it.
+
+## Why that's fine for the gaps it omits
+
+The omitted (manual) gaps are the spans **after Claude stops, before your next prompt**. During that gap, Claude is provably idle â€” it literally cannot be doing anything, because it's waiting for your input. So omitting that entire span is correct, every time. This is where ~all your manual-intervention time lives (reading, approving gates, manual verification, typing the next instruction).
+
+```
+you prompt â”€â”€â”€â”€â”€â”€â–º Claude works â”€â”€â”€â”€â”€â”€â–º Claude stops    [you read/think/type]    you prompt â”€â”€â–º
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ COUNTED as active â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜         â””â”€â”€â”€ OMITTED (manual) â”€â”€â”˜
+```
+
+## The one imperfect case
+
+The reverse situation can't be measured precisely: a gap that happens **while a turn is still "open"** â€” i.e., you sent a prompt, Claude is mid-work, and *you* step away.
+
+```
+you prompt â”€â”€â–º Claude works 2 min â”€â”€â–º [you walk away 60 min] â”€â”€â–º Claude still "working" â”€â”€â–º stops
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ALL counted as active (incl. your 60 min away) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+```
+
+From the system's view, that whole stretch is one active turn â€” it has no event to mark "user left." In practice this barely happens, because Claude doesn't pause mid-turn to wait on you; it runs to completion and *then* stops (which starts an omitted gap). The only way to land here is to walk away in the middle of Claude actively running â€” uncommon, and usually short.
+
+## Bottom line
+
+- **Between-turn waiting** (the overwhelming majority of manual time): omitted accurately. âœ…
+- **Walking away mid-turn** (rare): would count as active, slightly inflating the active figure.
+
+That's the trade-off of a hook-based, event-driven timer. Getting true keystroke-level precision would require continuous activity sampling, which Claude Code hooks don't provide. If that edge case matters to you, the cleanest mitigation is to send a quick prompt (even just "pause") when you step away mid-work â€” that closes the turn and starts an omitted gap. Want me to note that in the timing policy?
+
+---
+
+
+_**User: shamima-g (2026-06-01 11:30Z)**_
+
+Read through teh project and give me a sample report, how you will generate the report with the timing fro each and every phase
+
+
+_**Agent (model claude-opus-4-8)**_
+
+Let me read the actual workflow design so the sample report maps to your real phases, sub-phases, and agents.
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: Read_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+Read it. Here's how your phases/agents map to the report, then a full sample.
+
+**Phase â†’ sub-phase (agent) mapping the report uses:**
+- **INTAKE** â†’ `intake-agent`, `api-connectivity-agent`
+- **PLAN** â†’ `feature-planner` (epics + per-epic stories)
+- **BUILD** (per-story loop) â†’ `test-generator` â†’ `developer` â†’ `playwright-runner` âˆ¥ `code-reviewer`; plus on-demand `design-api-agent`, `type-generator-agent`, `mock-setup-agent`, `design-style-agent`
+- **COMPLETE** â†’ final summary (orchestrator)
+
+## Sample report
+
+This is **illustrative data** â€” a 2-epic / 5-story feature â€” laid out exactly as `generate-timing-report.js` writes `generated-docs/timing/timing-report.md`:
+
+```markdown
+# Build Timing Report
+
+> Active build time = wall-clock âˆ’ manual-intervention time. Manual-intervention
+> time (waiting on the user: gate approvals, manual verification, /clear gaps,
+> answering questions) is measured and excluded.
+
+## Summary
+
+| Metric | Value |
+|---|---|
+| First event | 2026-06-01T13:02:11.004Z |
+| Last event | 2026-06-01T15:10:33.218Z |
+| Total wall-clock | 2h 8m 22s |
+| Manual-intervention time (excluded) | 41m 52s |
+| **Active build time** | **1h 26m 30s** |
+| Recorded events | 312 |
+
+## Active time by phase (macro)
+
+| Phase | Active time | % of active |
+|---|---|---|
+| INTAKE | 8m | 9% |
+| PLAN | 6m 12s | 7% |
+| BUILD | 1h 10m 18s | 81% |
+| COMPLETE | 2m | 2% |
+
+## Active time by sub-phase (granular â€” from agent spans)
+
+| Sub-phase | Active time | Runs |
+|---|---|---|
+| development | 28m 50s | 5 |
+| test-generation | 21m 30s | 5 |
+| review | 11m 10s | 5 |
+| e2e | 8m 40s | 5 |
+| planning | 5m 2s | 3 |
+| api-design | 4m 30s | 1 |
+| intake | 3m 48s | 2 |
+| styling | 3m 20s | 1 |
+| type-generation | 2m 15s | 1 |
+| mock-setup | 1m 40s | 1 |
+
+## BUILD active time per story
+
+| Story | Active time |
+|---|---|
+| epic-1/story-1 | 14m 2s |
+| epic-1/story-2 | 16m 20s |
+| epic-1/story-3 | 13m 10s |
+| epic-2/story-1 | 15m 5s |
+| epic-2/story-2 | 11m 40s |
+
+## Cross-check vs workflow-state.json history
+
+Wall-clock spans between phase transitions recorded in `state.history[]`
+(includes manual time â€” for sanity-checking phase boundaries, not active time):
+
+| Entered phase | Wall-clock until next transition |
+|---|---|
+| INTAKE | 18m 30s |
+| PLAN | 21m 14s |
+| BUILD | 1h 26m 38s |
+| COMPLETE | 2m |
+
+---
+
+_Generated by `.claude/scripts/generate-timing-report.js` from
+`generated-docs/timing/timing-ledger.jsonl`._
+```
+
+## How to read it (and two honest notes)
+
+- **The headline number** is *Active build time* (1h 26m 30s here) â€” wall-clock minus the 41m 52s you spent on approvals/verification/typing.
+- **Phase table** answers "where did the time go" at the macro level â€” BUILD dominates (81%), as expected.
+- **Sub-phase table** is the granular breakdown, summed from each agent's `startâ†’stop` span, sorted longest-first.
+- **Note 1 â€” sub-phases sum to *less* than their phase.** The agent spans (e.g. development + test-generation + review + e2e â‰ˆ 70m) don't equal the BUILD total (70m 18s) exactly *plus* there's orchestrator time between agents â€” reading agent output, deciding the next step, running commits. That overhead lands in the phase total but not in any single agent span. So phase â‰¥ Î£(its sub-phases) always.
+- **Note 2 â€” the cross-check column includes manual time on purpose.** It's pulled from `state.history` phase-transition timestamps to sanity-check that phase *boundaries* line up; it's wall-clock, not active time, which is why BUILD shows 1h 26m there vs 1h 10m active.
+
+## How/when it's generated
+- **Automatically at COMPLETE** (Rule 13), and any time you ask for build timing.
+- Each run reads the **entire** ledger and overwrites the report, so the final one covers the whole build regardless of how many `/clear`s happened.
+- Command: `node .claude/scripts/generate-timing-report.js`.
+
+Want me to wire the COMPLETE step to also **commit** the generated report automatically, so it lands in git as a project artifact?
+
+---
+
+
+_**User: shamima-g (2026-06-01 11:35Z)**_
+
+yes
+
+
+#### Permission Request - 2026-06-01 11:35Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-01 11:35Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-01 11:36Z
+
+**Tool:** `PowerShell`
+
+---
+
