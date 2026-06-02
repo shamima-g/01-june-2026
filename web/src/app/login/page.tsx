@@ -16,6 +16,11 @@
  *     a DISTINCT "can't reach the service" message.
  * Both keep the user on `/login` and surface inline via `role="alert"` (and a
  * toast) — never a redirect.
+ *
+ * On success it also records the client-side session-start marker (Epic 1,
+ * Story 3) so the SessionManager can enforce the 8-hour absolute cap and so
+ * authenticated surfaces can perform their lightweight "is there a session?"
+ * route check.
  */
 
 import { useState } from 'react';
@@ -24,6 +29,7 @@ import { useRouter } from 'next/navigation';
 import { post } from '@/lib/api/client';
 import type { APIError } from '@/types/api';
 import { fetchSignedInRole, resolveLandingRoute } from '@/lib/auth/roles';
+import { markSessionStart } from '@/lib/session/session-client';
 import { useToast } from '@/contexts/ToastContext';
 
 import { Button } from '@/components/ui/button';
@@ -73,8 +79,13 @@ export default function LoginPage() {
       // the username (project-brief §3 / §9).
       await post(LOGIN_PATH, { Username: email, Password: password });
 
-      // Login succeeded (session cookie now set). Resolve the role from the
-      // swappable source, then route to the role-specific landing surface.
+      // Login succeeded (session cookie now set). Record the client-side
+      // session-start marker so the SessionManager's absolute-cap clock and the
+      // authenticated-surface route guard have a signal to read.
+      markSessionStart();
+
+      // Resolve the role from the swappable source, then route to the
+      // role-specific landing surface.
       const role = await fetchSignedInRole(email);
       router.push(resolveLandingRoute(role));
     } catch (err) {

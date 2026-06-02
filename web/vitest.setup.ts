@@ -6,84 +6,30 @@ import '@testing-library/jest-dom/vitest';
 // src/__tests__/vitest-axe.d.ts (Vitest 4 resolves matchers via @vitest/expect's
 // `Matchers` interface, which the package's own `extend-expect` does not target).
 import * as matchers from 'vitest-axe/matchers';
-import { expect } from 'vitest';
+import { expect, vi } from 'vitest';
 
 expect.extend(matchers);
 
-// Polyfill for Web APIs needed by Next.js
-// These are required for testing files that import from 'next/server'
-if (typeof Request === 'undefined') {
-  global.Request = class Request {
-    url: string;
-    method: string;
-    headers: Headers;
+// React Testing Library `waitFor` + Vitest fake timers bridge.
+//
+// RTL detects fake timers (Vitest's faked `setTimeout` carries a `.clock`
+// property) and, while waiting, advances them via `jest.advanceTimersByTime`.
+// Under Vitest there is no `jest` global, so that call throws inside RTL's poll
+// loop and `waitFor` deadlocks until the test times out. We expose a minimal,
+// Jest-compatible timer shim backed by Vitest's own clock so `waitFor` (and any
+// other RTL async util) advances the fake timers correctly. This is purely test
+// infrastructure — it changes no production behaviour.
+const timerShim = {
+  advanceTimersByTime: (ms: number) => vi.advanceTimersByTime(ms),
+  advanceTimersToNextTimer: () => vi.advanceTimersToNextTimer(),
+  runOnlyPendingTimers: () => vi.runOnlyPendingTimers(),
+  getTimerCount: () => vi.getTimerCount(),
+};
 
-    constructor(input: string | Request, init?: RequestInit) {
-      this.url = typeof input === 'string' ? input : input.url;
-      this.method = init?.method || 'GET';
-      this.headers = new Headers(init?.headers);
-    }
-  } as unknown as typeof Request;
-}
+const globalWithJest = globalThis as typeof globalThis & {
+  jest?: typeof timerShim;
+};
 
-if (typeof Response === 'undefined') {
-  global.Response = class Response {
-    status: number;
-    statusText: string;
-    headers: Headers;
-    body: unknown;
-
-    constructor(body?: BodyInit | null, init?: ResponseInit) {
-      this.body = body;
-      this.status = init?.status || 200;
-      this.statusText = init?.statusText || 'OK';
-      this.headers = new Headers(init?.headers);
-    }
-
-    json() {
-      return Promise.resolve(JSON.parse(this.body as string));
-    }
-  } as unknown as typeof Response;
-}
-
-if (typeof Headers === 'undefined') {
-  global.Headers = class Headers {
-    private headers: Map<string, string> = new Map();
-
-    constructor(init?: HeadersInit) {
-      if (init) {
-        if (Array.isArray(init)) {
-          init.forEach(([key, value]) =>
-            this.headers.set(key.toLowerCase(), value),
-          );
-        } else if (init instanceof Headers) {
-          init.forEach((value, key) => this.headers.set(key, value));
-        } else {
-          Object.entries(init).forEach(([key, value]) =>
-            this.headers.set(key.toLowerCase(), value),
-          );
-        }
-      }
-    }
-
-    get(name: string) {
-      return this.headers.get(name.toLowerCase()) || null;
-    }
-
-    set(name: string, value: string) {
-      this.headers.set(name.toLowerCase(), value);
-    }
-
-    has(name: string) {
-      return this.headers.has(name.toLowerCase());
-    }
-
-    delete(name: string) {
-      this.headers.delete(name.toLowerCase());
-    }
-
-    forEach(callback: (value: string, key: string, parent: Headers) => void) {
-      this.headers.forEach((value, key) => callback(value, key, this));
-    }
-  } as unknown as typeof Headers;
+if (!globalWithJest.jest) {
+  globalWithJest.jest = timerShim;
 }
