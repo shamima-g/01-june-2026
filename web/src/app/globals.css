@@ -42,6 +42,26 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* Status colour tokens (R16 / brief §11) — exposed as Tailwind utility colours
+     so components reference `bg-status-*` / `text-status-*` / `border-status-*`
+     instead of hex literals. Each status group has a soft tinted background paired
+     with a strong foreground for WCAG 2.2 AA text contrast (NFR1). */
+  --color-status-info-bg: var(--status-info-bg);
+  --color-status-info-fg: var(--status-info-fg);
+  --color-status-info-border: var(--status-info-border);
+  --color-status-success-bg: var(--status-success-bg);
+  --color-status-success-fg: var(--status-success-fg);
+  --color-status-success-border: var(--status-success-border);
+  --color-status-danger-bg: var(--status-danger-bg);
+  --color-status-danger-fg: var(--status-danger-fg);
+  --color-status-danger-border: var(--status-danger-border);
+  --color-status-warning-bg: var(--status-warning-bg);
+  --color-status-warning-fg: var(--status-warning-fg);
+  --color-status-warning-border: var(--status-warning-border);
+  --color-status-neutral-bg: var(--status-neutral-bg);
+  --color-status-neutral-fg: var(--status-neutral-fg);
+  --color-status-neutral-border: var(--status-neutral-border);
 }
 
 :root {
@@ -77,6 +97,27 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Status palette (brief §11): Info #0369A1 (blue), Success #15803D (green),
+     Error #B91C1C (red), Warning #B45309 (amber), plus a neutral grey for the
+     Uploaded state. Backgrounds are light tints of each hue; foregrounds are the
+     brand hex for AA-contrast label text on the tint. Defined once here — never
+     duplicated in component files. */
+  --status-info-bg: #e0f2fe;
+  --status-info-fg: #075985;
+  --status-info-border: #7dd3fc;
+  --status-success-bg: #dcfce7;
+  --status-success-fg: #15803d;
+  --status-success-border: #86efac;
+  --status-danger-bg: #fee2e2;
+  --status-danger-fg: #b91c1c;
+  --status-danger-border: #fca5a5;
+  --status-warning-bg: #fef3c7;
+  --status-warning-fg: #b45309;
+  --status-warning-border: #fcd34d;
+  --status-neutral-bg: #f1f5f9;
+  --status-neutral-fg: #475569;
+  --status-neutral-border: #cbd5e1;
 }
 
 .dark {
