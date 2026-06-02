@@ -68,6 +68,15 @@ export function resolveLandingRoute(role: string | null | undefined): string {
 }
 
 /**
+ * Narrows an arbitrary string to a known role, or `null` when unrecognised.
+ * Lets callers RBAC-gate UI affordances against the canonical role set without
+ * re-declaring it (e.g. "show the Upload CTA only for an Importer").
+ */
+export function asKnownRole(role: string | null | undefined): KnownRole | null {
+  return role && role in LANDING_ROUTES ? (role as KnownRole) : null;
+}
+
+/**
  * The minimal user-record shape both role sources expose. `userinfo` returns a
  * single record; `/v1/users` returns a `{ Users: [...] }` envelope the API
  * client unwraps to an array. Either way each record carries the role as a
@@ -88,10 +97,27 @@ function readRole(record: RoleBearingRecord | null | undefined): string | null {
 }
 
 /**
+ * Resolves the CURRENT signed-in user's role on a protected surface, where the
+ * username entered at login is no longer in hand (e.g. the user navigated
+ * directly to `/files`). Reuses the same swappable source as `fetchSignedInRole`
+ * with an empty username — `userinfo` (when confirmed) returns the single
+ * signed-in record, and the `/v1/users` fallback reads the first record (the
+ * collection is already scoped to the session cookie). Used to RBAC-gate the
+ * Importer-only Upload CTA (BR12); on `null` the caller hides the affordance
+ * rather than risk exposing it.
+ */
+export async function fetchCurrentRole(): Promise<string | null> {
+  return fetchSignedInRole('');
+}
+
+/**
  * Resolves the signed-in user's role from the swappable source described above.
  *
  * @param username the email the user signed in with — used to match the right
- *                 record when falling back to the `/v1/users` collection.
+ *                 record when falling back to the `/v1/users` collection. Pass
+ *                 an empty string on a protected surface where the username is
+ *                 not in hand; the first record is then read (the cookie-scoped
+ *                 `/v1/users` returns the signed-in user first).
  * @returns the role name, or `null` if no source yielded one (caller applies
  *          the safe fallback route).
  */
@@ -108,13 +134,16 @@ export async function fetchSignedInRole(
     // userinfo unconfirmed on the live backend — fall through to /v1/users.
   }
 
-  // Source 2 — the verified transactions backend's user list, matched by email.
+  // Source 2 — the verified transactions backend's user list, matched by email
+  // when one was provided, else the first (cookie-scoped) record.
   try {
     const users = await get<RoleBearingRecord[]>(USERS_PATH);
     if (Array.isArray(users)) {
-      const match =
-        users.find((u) => u.Email?.toLowerCase() === username.toLowerCase()) ??
-        users[0];
+      const match = username
+        ? (users.find(
+            (u) => u.Email?.toLowerCase() === username.toLowerCase(),
+          ) ?? users[0])
+        : users[0];
       const role = readRole(match);
       if (role) return role;
     } else {

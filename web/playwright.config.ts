@@ -7,7 +7,12 @@ export default defineConfig({
   testMatch: /.*\.spec\.ts$/,
   fullyParallel: true,
   forbidOnly: isCI,
-  retries: isCI ? 2 : 0,
+  // CI runs serially (workers: 1) and retries twice. Locally we run against
+  // `next dev`, which compiles routes on first request — under parallel workers
+  // the first hit on a cold route (login / a freshly added page) can time out.
+  // One local retry hits the now-warm route and passes deterministically, so the
+  // suite reflects real app behaviour rather than dev-server warmup timing.
+  retries: isCI ? 2 : 1,
   workers: isCI ? 1 : undefined,
   reporter: isCI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {

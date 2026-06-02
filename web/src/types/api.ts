@@ -88,3 +88,44 @@ export const HTTPStatus = {
 } as const;
 
 export type HTTPStatusCode = (typeof HTTPStatus)[keyof typeof HTTPStatus];
+
+/**
+ * FileLog — a file-ingestion log entry as the live transactions backend emits
+ * it, in observed PascalCase (project-brief §6 / §13.C / §13.F).
+ *
+ * Field-shape notes the UI must honour:
+ *   - The collection arrives wrapped in the SINGULAR `{ FileLog: [...] }`
+ *     envelope, which the API client (handleSuccessResponse) unwraps to a bare
+ *     `FileLog[]` before any caller sees it.
+ *   - `RecordCount` arrives as a STRING (spec + observed drift), not a number —
+ *     consumers format/coerce it.
+ *   - "File Name" binds to `CurrentFileName` (§13.F).
+ *   - File Status is DERIVED from `LastExecutedActivityName` (preferred) /
+ *     `CurrentStatus` — see `deriveFileStatus`.
+ */
+export interface FileLog {
+  Id: number;
+  ProcessDate: string;
+  SettingId: number;
+  SettingName: string;
+  CurrentFileName: string;
+  RecordCount: string;
+  CurrentStatus: string;
+  LastExecutedActivityName: string;
+  IsActive: boolean;
+  HasBulkErrorFile: string;
+  BulkErrorFile: string;
+}
+
+/**
+ * The derived File Status lifecycle enum (project-brief §6, R16). Rendered by
+ * the shared StatusBadge, which colour+icon+label-maps each value.
+ */
+export const FileStatus = {
+  Uploaded: 'Uploaded',
+  Processing: 'Processing',
+  Completed: 'Completed',
+  Failed: 'Failed',
+} as const;
+
+export type FileStatusValue = (typeof FileStatus)[keyof typeof FileStatus];
