@@ -878,3 +878,335 @@ yes
 
 ---
 
+
+_**Agent (model claude-opus-4-8)**_
+
+I'll wire the report generation + commit into the COMPLETE step. Let me find where COMPLETE is handled in the continue command.
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: Grep_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: Read_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: Edit_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+Let me reflect the auto-commit in the policy (single source of truth):
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: Edit_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+Now commit these changes on the same branch:
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+
+
+_Tools used: PowerShell_
+
+---
+
+_**Agent (model claude-opus-4-8)**_
+
+Done â€” committed as `f53de08` on `feature/build-timing`.
+
+The COMPLETE step now does this automatically (Path 1 in [continue.md](.claude/commands/continue.md#L541)):
+
+1. **Marks the feature complete** (`transition-phase.js --feature-complete`)
+2. **Generates the report** â€” `node .claude/scripts/generate-timing-report.js`, reading the full ledger so it spans every phase across all `/clear`s and sessions
+3. **Commits + pushes** the ledger and report:
+   ```
+   git add generated-docs/timing/timing-ledger.jsonl generated-docs/timing/timing-report.md .claude/logs/
+   git commit -m "chore(timing): final build-timing report at feature completion"
+   git push origin HEAD
+   ```
+4. **Reports the headline number** in the congratulations line:
+   > Active build time: [X] (manual-intervention time excluded). Full breakdown: generated-docs/timing/timing-report.md
+
+It's also designed to **not block COMPLETE** â€” if the ledger is missing/empty (e.g. the timing hook never fired), it notes that and continues rather than failing the finish. The policy ([timing-policy.md](.claude/policies/timing-policy.md)) was updated to document the auto-commit as the single source of truth.
+
+So at the end of your project, the timing report (`generated-docs/timing/timing-report.md`) will be generated, committed to git, and surfaced to you automatically â€” no manual step needed.
+
+Two branch commits are now staged locally (`10a79aa`, `f53de08`) on `feature/build-timing`. Want me to push the branch and open a PR?
+
+---
+
+
+---
+
+## Session Summary
+
+**Ended:** 2026-06-01 11:42Z
+**Total Prompts:** 9
+**Tools Used:** Glob, Read, Write, Edit, PowerShell, Grep
+**Files Modified:** 8
+
+### Token Usage
+
+_Token usage data not available. Run `/context` during session to capture token usage._
+
+### Modified Files
+- .\timing.md
+- .\.claude\hooks\record-timing.ps1
+- .\.claude\scripts\generate-timing-report.js
+- .\.claude\settings.json
+- .\CLAUDE.md
+- .\.claude\policies\timing-policy.md
+- .\generated-docs\timing\.gitkeep
+- .\.claude\commands\continue.md
+
+
+---
+
+## Session Resumed (2026-06-02 02:20Z)
+
+**Permission Mode:** 
+
+---
+
+
+_**User: shamima-g (2026-06-02 02:22Z)**_
+
+Can you check if the permissions requests is also excluded from the timing?
+
+
+#### Permission Request - 2026-06-02 02:24Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:25Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:25Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:25Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:25Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:25Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:26Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:26Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:26Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:27Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:27Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:28Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:28Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:29Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:32Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:32Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:36Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:39Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:41Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:42Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:42Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:42Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:42Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:43Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:43Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:43Z
+
+**Tool:** `Edit`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:43Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:44Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:44Z
+
+**Tool:** `PowerShell`
+
+---
+
+
+#### Permission Request - 2026-06-02 02:45Z
+
+**Tool:** `PowerShell`
+
+---
+

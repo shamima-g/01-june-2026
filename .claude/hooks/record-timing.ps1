@@ -17,7 +17,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('prompt', 'response', 'subagent_start', 'subagent_stop', 'session_start', 'session_end')]
+    [ValidateSet('prompt', 'response', 'subagent_start', 'subagent_stop', 'session_start', 'session_end', 'permission_request', 'pre_tool_use')]
     [string]$EventType
 )
 
@@ -31,12 +31,32 @@ try {
     $projectPath = $hookData.cwd
     if (-not $projectPath) { exit 0 }
 
+    # Use a separate variable for the event label written to the ledger. $EventType
+    # carries a [ValidateSet] that PowerShell re-checks on every assignment, so we
+    # must NOT reassign it (e.g. to the derived 'permission_resolved' label).
+    $eventName = $EventType
+
     # --- Resolve the timing ledger path (create dir on first use) ---
     $timingDir = Join-Path $projectPath 'generated-docs\timing'
     if (-not (Test-Path $timingDir)) {
         New-Item -ItemType Directory -Force -Path $timingDir | Out-Null
     }
     $ledgerPath = Join-Path $timingDir 'timing-ledger.jsonl'
+
+    # --- PreToolUse fires for EVERY tool. Only record it when it resolves a pending
+    #     permission prompt (the previous ledger event is permission_request), and
+    #     relabel it 'permission_resolved'. This bounds the permission-wait gap
+    #     without bloating the ledger with a line per tool call. ---
+    if ($EventType -eq 'pre_tool_use') {
+        $lastLine = $null
+        if (Test-Path $ledgerPath) {
+            $lastLine = Get-Content $ledgerPath -Tail 1 -ErrorAction SilentlyContinue
+        }
+        if (-not ($lastLine -and ($lastLine -match '"event":"permission_request"'))) {
+            exit 0
+        }
+        $eventName = 'permission_resolved'
+    }
 
     # --- Read current workflow phase (best-effort; null when no workflow yet) ---
     $phase = $null
@@ -56,7 +76,7 @@ try {
 
     # --- Resolve subagent name for granular sub-phase attribution ---
     $agent = $null
-    if ($EventType -eq 'subagent_start' -or $EventType -eq 'subagent_stop') {
+    if ($eventName -eq 'subagent_start' -or $eventName -eq 'subagent_stop') {
         foreach ($prop in @('subagent_type', 'agent_type', 'agent_name', 'agent')) {
             if ($hookData.PSObject.Properties.Name -contains $prop -and $hookData.$prop) {
                 $agent = $hookData.$prop
@@ -75,7 +95,7 @@ try {
     # --- Build and append the ledger entry (one compact JSON line) ---
     $entry = [ordered]@{
         ts          = (Get-Date).ToUniversalTime().ToString("o")
-        event       = $EventType
+        event       = $eventName
         phase       = $phase
         epic        = $epic
         story       = $story
@@ -87,8 +107,10 @@ try {
     $line = $entry | ConvertTo-Json -Compress
     # Append BOM-less UTF-8. Windows PowerShell 5.1's `Add-Content -Encoding utf8`
     # prepends a BOM on file creation, which corrupts the first JSON line.
+    # CRLF line endings so Get-Content -Tail (used above for the permission-resolve
+    # check) reads reliably on Windows PowerShell. The report splits on /\r?\n/.
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::AppendAllText($ledgerPath, $line + "`n", $utf8NoBom)
+    [System.IO.File]::AppendAllText($ledgerPath, $line + "`r`n", $utf8NoBom)
 }
 catch {
     # Never block the workflow on a timing error.

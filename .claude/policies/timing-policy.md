@@ -55,10 +55,20 @@ This is captured automatically; it does not rely on Claude remembering.
 
 The report walks consecutive ledger events. An interval is **active** unless it
 *follows* a point where Claude handed control back to the user. Intervals that start
-with `response`, `session_end`, or `session_start` are **manual / idle** and are
-subtracted; intervals starting with `prompt`, `subagent_start`, or `subagent_stop`
-are active. This cleanly excludes think time, gate waits, `/clear` gaps, and
-overnight breaks without any manual bookkeeping.
+with `response`, `session_end`, `session_start`, or `permission_request` are
+**manual / idle** and are subtracted; intervals starting with `prompt`,
+`subagent_start`, `subagent_stop`, or `permission_resolved` are active. This cleanly
+excludes think time, gate waits, `/clear` gaps, and overnight breaks without any
+manual bookkeeping.
+
+**Permission-approval waits are excluded too.** A permission prompt happens mid-turn
+(Claude is otherwise working), so it would be counted as active unless handled
+specially. The `record-timing.ps1` hook logs `permission_request` when the prompt is
+shown; the next `PreToolUse` (the approval) is recorded as `permission_resolved`,
+which bounds the wait. That `permission_request` → `permission_resolved` span is
+subtracted and also broken out as its own line in the report summary. To keep the
+ledger lean, `PreToolUse` is only recorded when it directly resolves a pending
+permission prompt — not for every tool call.
 
 ## Manual fallback (only if the hook is unavailable)
 

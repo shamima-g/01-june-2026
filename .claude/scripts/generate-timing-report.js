@@ -31,7 +31,9 @@ const REPORT_PATH = path.join(PROJECT_ROOT, 'generated-docs', 'timing', 'timing-
 const STATE_PATH = path.join(PROJECT_ROOT, 'generated-docs', 'context', 'workflow-state.json');
 
 // Intervals that START with one of these events are the user's time, not Claude's.
-const IDLE_AFTER = new Set(['response', 'session_end', 'session_start']);
+// `permission_request` → next event (the approval, recorded as `permission_resolved`)
+// is the time spent waiting for the user to approve/deny a tool call.
+const IDLE_AFTER = new Set(['response', 'session_end', 'session_start', 'permission_request']);
 
 // Map agent type → the granular sub-phase it represents.
 const AGENT_SUBPHASE = {
@@ -86,6 +88,7 @@ function analyze(events) {
   const result = {
     wallClockMs: 0,
     manualMs: 0,
+    permissionMs: 0,
     activeMs: 0,
     byPhase: {},          // phase → active ms
     byAgentSubphase: {},  // sub-phase → { ms, count }
@@ -110,6 +113,7 @@ function analyze(events) {
 
     if (IDLE_AFTER.has(cur.event)) {
       result.manualMs += dur;
+      if (cur.event === 'permission_request') result.permissionMs += dur;
     } else {
       result.activeMs += dur;
       const phase = cur.phase || 'UNKNOWN';
@@ -186,6 +190,7 @@ function buildReport(a, historyRows) {
   lines.push(`| Last event | ${a.lastTs || '—'} |`);
   lines.push(`| Total wall-clock | ${fmt(a.wallClockMs)} |`);
   lines.push(`| Manual-intervention time (excluded) | ${fmt(a.manualMs)} |`);
+  lines.push(`| &nbsp;&nbsp;— of which permission-approval waits | ${fmt(a.permissionMs)} |`);
   lines.push(`| **Active build time** | **${fmt(a.activeMs)}** |`);
   lines.push(`| Recorded events | ${a.eventCount} |`);
   lines.push('');
