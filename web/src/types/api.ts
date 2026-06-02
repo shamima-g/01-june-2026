@@ -129,3 +129,38 @@ export const FileStatus = {
 } as const;
 
 export type FileStatusValue = (typeof FileStatus)[keyof typeof FileStatus];
+
+/**
+ * Transaction — a single bank-transaction record as the live transactions
+ * backend emits it, in observed PascalCase (project-brief §6 / §13.C / §13.D).
+ *
+ * Field-shape notes the UI must honour:
+ *   - The collection arrives wrapped in the SINGULAR `{ Transactions: [...] }`
+ *     envelope (spec `TransactionReadList.Transactions`), which the API client
+ *     (handleSuccessResponse) unwraps to a bare `Transaction[]` before any
+ *     caller sees it.
+ *   - `GET /v1/transactions` takes NO `FileLogId` filter param (project-brief
+ *     §9 Transaction Review + story summary) — callers fetch the full set and
+ *     filter CLIENT-SIDE by `FileLogId` to obtain a single file's slice.
+ *   - `Status` carries the TransactionStatus lifecycle (`Imported` / `Approved`
+ *     / `Rejected`), rendered via the shared StatusBadge.
+ *   - `Amount` is numeric; consumers format it. `TransactionType` value format
+ *     (`C`/`D` vs `Debit`) is unresolved across spec/BRD (§13.D) — consumers
+ *     display the raw value.
+ */
+export interface Transaction {
+  Id: number;
+  FileLogId: number;
+  FileName: string;
+  Reference: string;
+  TransactionDate: string;
+  AccountNumber: string;
+  Description: string;
+  Amount: number;
+  TransactionType: string;
+  Currency: string;
+  Status: string;
+  UserNote: string;
+  LastChangedUser: string;
+  LastChangedDate: string;
+}
