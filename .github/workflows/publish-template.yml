@@ -81,17 +81,17 @@ jobs:
             staging/.github/workflows/sync-template.yml
 
           sed -i -E \
-            -e "s|by default \`$DEV_REPO\`|by default \`$RELEASE_REPO\`|" \
+            -e "s|Open the template repo \(\`$DEV_REPO\`\)|Open the template repo (\`$RELEASE_REPO\`)|" \
             -e "s|Resource owner:\*\* \`$DEV_OWNER\`|Resource owner:** \`$RELEASE_OWNER\`|" \
             -e "s|pick \`$DEV_REPO\`|pick \`$RELEASE_REPO\`|" \
-            staging/.template-docs/Help/Template-Sync.md
+            staging/.template-docs/users/Help/Template-Sync.md
 
       - name: Verify staging content
         run: |
           echo "=== Excluded files (should NOT appear) ==="
           for f in \
-            ".template-docs/CONTRIBUTING.md" \
-            ".template-docs/TEMPLATE_DEVELOPMENT.md" \
+            ".template-docs/template-maintainers/CONTRIBUTING.md" \
+            ".template-docs/template-maintainers/TEMPLATE_DEVELOPMENT.md" \
             ".release-ignore" \
             ".github/workflows/publish-template.yml"; do
             if [ -f "staging/$f" ]; then
@@ -141,15 +141,15 @@ jobs:
           }
 
           SYNC=staging/.github/workflows/sync-template.yml
-          DOC=staging/.template-docs/Help/Template-Sync.md
+          DOC=staging/.template-docs/users/Help/Template-Sync.md
           RELEASE_OWNER="${RELEASE_REPO%%/*}"
           DEV_OWNER="${DEV_REPO%%/*}"
 
           assert_present "TEMPLATE_SOURCE_REPO || '$RELEASE_REPO'" "$SYNC" "sync workflow defaults to $RELEASE_REPO"
           assert_absent  "TEMPLATE_SOURCE_REPO || '$DEV_REPO'" "$SYNC" "sync workflow no longer references dev source as default"
 
-          assert_present "by default \`$RELEASE_REPO\`" "$DOC" "setup doc references $RELEASE_REPO as default"
-          assert_absent  "by default \`$DEV_REPO\`" "$DOC" "setup doc no longer references dev source as default"
+          assert_present "Open the template repo (\`$RELEASE_REPO\`)" "$DOC" "setup doc references $RELEASE_REPO for workflow file updates"
+          assert_absent  "Open the template repo (\`$DEV_REPO\`)" "$DOC" "setup doc no longer references dev source for workflow file updates"
 
           assert_present "Resource owner:** \`$RELEASE_OWNER\`" "$DOC" "setup doc Resource owner rewritten to $RELEASE_OWNER"
           assert_absent  "Resource owner:** \`$DEV_OWNER\`" "$DOC" "setup doc Resource owner no longer references $DEV_OWNER"
@@ -173,7 +173,12 @@ jobs:
         run: |
           cd release-repo
 
-          rsync -a --delete --exclude='.git' ../staging/ .
+          # Workflow files are NOT pushed here: the release-repo GitHub App lacks the
+          # `workflows` permission, so any change under .github/workflows/ is rejected
+          # by GitHub. They're maintained manually in the release repo — see the
+          # "Creating a Release" steps in CONTRIBUTING.md. Excluding the dir also
+          # protects the release repo's existing workflows from --delete.
+          rsync -a --delete --exclude='.git' --exclude='.github/workflows/' ../staging/ .
 
           git add -A
 
@@ -205,6 +210,36 @@ jobs:
             git tag -a "$TAG" -m "Release $TAG"
             git push origin "$TAG"
             echo "Tagged ${{ env.RELEASE_REPO }} with $TAG"
+          fi
+
+      - name: Publish release notes to release repo
+        if: ${{ github.event_name == 'release' && github.event.inputs.dry_run != 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          # Passed via env (not inlined into the script) to avoid shell injection
+          # from release-body contents.
+          RELEASE_BODY: ${{ github.event.release.body }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+
+          # Mirror the dev release's notes onto the release repo so consumers see the
+          # same changelog. The tag already exists (previous step) and the App's
+          # Contents:write permission covers releases. Idempotent: a publish re-run
+          # edits the existing release instead of failing.
+          PRERELEASE_FLAG=""
+          if [ "$IS_PRERELEASE" = "true" ]; then PRERELEASE_FLAG="--prerelease"; fi
+
+          if gh release view "$TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$RELEASE_REPO" \
+              --title "${RELEASE_NAME:-$TAG}" --notes "$RELEASE_BODY" $PRERELEASE_FLAG
+            echo "Updated release notes for $TAG on $RELEASE_REPO"
+          else
+            gh release create "$TAG" --repo "$RELEASE_REPO" \
+              --title "${RELEASE_NAME:-$TAG}" --notes "$RELEASE_BODY" $PRERELEASE_FLAG
+            echo "Created release $TAG on $RELEASE_REPO"
           fi
 
       - name: Dry run summary

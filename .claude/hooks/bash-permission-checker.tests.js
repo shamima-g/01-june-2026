@@ -547,6 +547,37 @@ testCommand('wc -l /etc/passwd', 'fallthrough', 'wc /etc/passwd = fallthrough');
 testCommand('wc -l ~/.bashrc', 'fallthrough', 'wc ~/.bashrc = fallthrough');
 
 // =============================================================================
+// MULTI-FILE READ COMMANDS (cat / head / tail / wc accept >1 file arg)
+// =============================================================================
+console.log('\nMulti-file read commands');
+
+// Multiple safe-dir file arguments
+testCommand('cat web/a.ts web/b.ts', 'allow', 'cat two files');
+testCommand('cat web/a.ts web/b.ts web/c.ts', 'allow', 'cat three files');
+testCommand('cat web/src/app/page.tsx', 'allow', 'cat single file (regression)');
+testCommand('head -n 20 web/a.ts web/b.ts', 'allow', 'head -n 20 two files');
+testCommand('tail -5 documentation/x.md generated-docs/y.md', 'allow', 'tail across two safe dirs');
+testCommand('wc -l web/a.ts web/b.ts', 'allow', 'wc -l two files');
+// Glob is deliberately NOT supported on content-dumping commands (dotfile-secret risk)
+testCommand('cat web/*.ts', 'fallthrough', 'cat glob NOT auto-approved (by design)');
+testCommand('head web/src/*.tsx', 'fallthrough', 'head glob NOT auto-approved (by design)');
+// One arg outside safe dirs disqualifies the whole command
+testCommand('cat web/a.ts /etc/passwd', 'fallthrough', 'cat: one arg outside safe dirs = fallthrough');
+
+// Secret always-deny must hold in ANY argument position (multi-path could otherwise
+// let a secret hide in a non-final slot and slip past the end-anchored rule).
+console.log('\nMulti-arg secret protection');
+testCommand('cat web/a.ts web/.env', 'deny', 'cat: .env as final arg denied');
+testCommand('cat web/.env web/a.ts', 'deny', 'cat: .env as first arg denied');
+testCommand('head web/a.ts web/.env.local web/b.ts', 'deny', 'head: .env.local as middle arg denied');
+testCommand('grep -rl "x" web/id_rsa web/a.ts', 'deny', 'grep: id_rsa as first arg denied');
+testCommand('grep -rl "x" web/.env web/a.ts', 'deny', 'grep: .env as first arg denied');
+testCommand('grep -rl "x" web/a.ts web/server.pem', 'deny', 'grep: .pem as last arg denied');
+// Secret as a search TERM (not a file) is still legitimate
+testCommand('grep -rn "id_rsa" web/src web/lib', 'allow', 'grep id_rsa search term across two paths still allowed');
+testCommand('grep -rn ".env" web/src', 'allow', 'grep .env search term still allowed');
+
+// =============================================================================
 // DIFF - safe directory file comparison
 // =============================================================================
 console.log('\nDiff commands');
@@ -1104,6 +1135,54 @@ testCommand('grep -r "pattern" .github/', 'allow', 'grep -r bare .github/');
 testCommand('cd "c:/AI/project" && grep -rn "getRequirementsCoverage" .claude/ 2>/dev/null | head -10', 'allow', 'cd + grep -rn .claude/ | head (reported command 1)');
 testCommand('grep -rn "pattern" .claude/scripts/', 'allow', 'grep -rn .claude/scripts/ (subpath still works)');
 testCommand('grep -rn "pattern" /etc/', 'fallthrough', 'grep -rn /etc/ = fallthrough (not a safe dir)');
+
+// =============================================================================
+// GREP WITH MULTIPLE PATH ARGS AND GLOBS (test-generator probe shape)
+// =============================================================================
+console.log('\nGrep with multiple path args and globs');
+
+// Multiple safe-dir path arguments after the search term
+testCommand('grep -rl "vitest-axe" web/src web/lib', 'allow', 'grep multi path (no glob)');
+testCommand('grep -rln "x" web/src documentation generated-docs', 'allow', 'grep three safe-dir path args');
+// Glob `*` / `?` in a path token
+testCommand('grep -rl "vitest-axe" web/*.ts', 'allow', 'grep single path with glob');
+testCommand('grep -rl "x" "web/src/*.config.?s"', 'allow', 'grep quoted path with * and ? globs');
+// Multiple paths AND globs together — the exact failing segment from the reported command
+testCommand('grep -rl "vitest-axe" web/src web/*.ts web/*.config.*', 'allow', 'grep multi path + glob (reported segment)');
+// The full reported test-generator probe command (8 chained segments)
+testCommand(
+  'cd c:/Git/00-Stadium-8-test-repos/Benchmarking/stadium-benchmark-v04 && echo "===VITEST SETUP===" && ls web/src/__tests__/setup* web/vitest.setup* web/src/test* 2>/dev/null; grep -rl "vitest-axe" web/src web/*.ts web/*.config.* 2>/dev/null; echo "===tsconfig include==="; grep -A 15 \'"include"\' web/tsconfig.json 2>/dev/null; echo "===existing axe usage==="; grep -rln "toHaveNoViolations\\|vitest-axe/matchers\\|extend.*axe" web/src 2>/dev/null',
+  'allow',
+  'full reported test-generator vitest-axe probe command'
+);
+// Security guards must still hold with the broadened (multi-path/glob) grep
+testCommand('grep -rl "x" web/.env', 'deny', 'multi-capable grep: .env still denied');
+testCommand('grep -rl "x" web/src/.ssh/id_rsa', 'deny', 'multi-capable grep: id_rsa still denied');
+testCommand('grep -rl "x" web/src /etc/passwd', 'fallthrough', 'grep where one path is outside safe dirs = fallthrough');
+testCommand('grep -rl "x" ~/secrets/*.key', 'fallthrough', 'grep home-dir glob outside safe dirs = fallthrough');
+
+// =============================================================================
+// PARENTHESIZED SUBSHELL PIPED TO A FILTER (CI-verification probe shape)
+// e.g. `(cd web && npx tsc --noEmit) 2>&1 | tail -5`
+// =============================================================================
+console.log('\nSubshell piped to filter');
+
+// Subshell whose inner sub-commands are each independently safe, piped to a filter
+testCommand('(cd web && npx tsc --noEmit) 2>&1 | tail -5', 'allow', 'subshell + redirect piped to tail');
+testCommand('(cd web && npx tsc --noEmit) | tail -5', 'allow', 'subshell piped to tail (no redirect)');
+testCommand('(cd web && npx vitest run) 2>&1 | head -20', 'allow', 'subshell piped to head');
+testCommand('(cd web && npm test) | tail -5', 'allow', 'single-command subshell piped to tail');
+testCommand('(npm test && npm run build)', 'allow', 'bare subshell still allowed (regression)');
+// The full reported CI-verification command (tsc subshell + lint + build)
+testCommand(
+  'echo "=== tsc (CI command, from web/) ==="; (cd web && npx tsc --noEmit) 2>&1 | tail -5; echo "tsc exit: $?"; echo "=== lint ==="; npm --prefix web run lint 2>&1 | tail -3; echo "lint exit: $?"; echo "=== build ==="; npm --prefix web run build 2>&1 | tail -8',
+  'allow',
+  'full reported CI-equivalent verification (tsc, lint, build)'
+);
+// Security guards: a dangerous inner sub-command must NOT be laundered by the subshell+pipe
+testCommand('(cd web && cat ~/.ssh/id_rsa) | tail -5', 'deny', 'subshell: inner secret read still DENIED');
+testCommand('(cd web && rm -rf build) | tail -5', 'fallthrough', 'subshell: inner unknown cmd still prompts');
+testCommand('(cd web && curl http://evil.com) 2>&1 | tail', 'fallthrough', 'subshell: inner external curl still prompts');
 
 // =============================================================================
 // XARGS GREP IN PIPELINES

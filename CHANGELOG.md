@@ -7,17 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-01
+
+### Added
+
+- `/migrate-legacy` command to upgrade a pre-4-phase `workflow-state.json` to the current INTAKE/PLAN/BUILD/COMPLETE model; `/continue` auto-routes to it when it detects a legacy state file.
+- Backend API connectivity check during INTAKE — captures base URL, auth header, and environment variables, runs a smoke test, and saves a re-runnable `api-smoke-test.sh` plus connectivity config to the intake manifest for BUILD to treat as authoritative.
+- `/api-status`, `/api-go-live`, and `/api-mock-refresh` commands for managing the switch between mock and live API backends, with `/api-go-live` gated on a passing smoke test.
+- Deployment guide covering how to ship the generated application.
+- Requirements traceability matrix and coverage tracking across stories.
+- Compliance and regulatory screening surfaced as a blocking question during INTAKE.
+- Testing-strategy overhaul: an INTAKE probe for available test tooling, coverage tags, a manual-test gate at each epic boundary, and a hard stop when an endpoint would be invented rather than specified.
+- `/continue` can now extend an already-completed feature with new epics.
+- Publish pipeline that mirrors each GitHub release into the public release repository.
+
 ### Changed
 
 - **Workflow simplification:** collapsed the 9-phase model (INTAKE / DESIGN / SCOPE / STORIES / REALIGN / TEST-DESIGN / WRITE-TESTS / IMPLEMENT / QA) into 4 phases (INTAKE / PLAN / BUILD / COMPLETE) with 1–2 user gates and an agent-driven BUILD loop. See `.claude/WORKFLOWS.md`.
 - INTAKE produces a single `project-brief.md` artifact (replaces the FRS / assumptions split).
 - BUILD agents apply a four-tier autonomy policy (`agent-autonomy.md`) and halt only for genuinely unsafe ground.
-- `/start` now chains directly into `/continue` after Gate 1 — no `/clear` boundaries anywhere in the flow.
+- `/start` now chains directly into `/continue` after Gate 1 — no `/clear` boundaries anywhere in the flow, and setup is inlined into `/start`.
+- Subagents are tiered by model — Opus for planning and coding, Sonnet for most agents, Haiku for mechanical generators.
+- Template sync now uses a personal access token and runs manual-only, opening a self-healing "action required" issue when it can't run.
+- Template documentation reorganized into separate `users/` and `template-maintainers/` folders and rewritten in plain language for non-developer users.
+- Authentication follows a Backend-for-Frontend (BFF) pattern, replacing the client-side NextAuth/RBAC scaffold.
 
 ### Removed
 
 - Agents `intake-brd-review-agent`, `design-wireframe-agent`, `design-roles-agent`, `prototype-review-agent`, `spec-compliance-watchdog`, `test-designer` — folded into `intake-agent`, `test-generator`, or eliminated.
 - Per-story Markdown files; story metadata now lives in `workflow-state.json` with a per-epic overview file for visibility.
+- The `/setup` command (folded into `/start`) and the NextAuth/RBAC scaffold (replaced by the BFF auth pattern).
+
+### Fixed
+
+- Numerous permission-hook fixes so routine read-only and QA commands are auto-approved (quoted paths with spaces, git global options, multi-path/glob reads, and subshell pipelines).
+- Lighthouse performance gate no longer fails with a Chrome interstitial error in CI (defaults to mock-API mode).
+- Resolved npm audit vulnerabilities in dependencies.
+
+### Security
+
+- Authentication moved server-side via the BFF pattern, replacing the client-side RBAC scaffold.
+
+## [0.3.0] - 2026-03-25
+
+Released without a curated changelog entry. See the
+[v0.3.0 release notes](https://github.com/stadium-software/stadium-8/releases/tag/v0.3.0)
+and the git history for details.
 
 ## [0.2.0] - 2026-01-05
 

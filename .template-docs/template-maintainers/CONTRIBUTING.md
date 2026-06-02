@@ -22,6 +22,7 @@ The template uses [Semantic Versioning](https://semver.org/):
    - Title: `vX.Y.Z`
    - Use "Generate release notes" for auto-categorized PR list
 5. The release notes will auto-categorize PRs based on labels (configured in [.github/release.yml](../.github/release.yml))
+6. **If this release changed any files under `.github/workflows/`:** the publish pipeline does **not** push workflow files to the release repo (`Digiata/Stadium-8`) — the publishing GitHub App lacks the `workflows` permission, so GitHub rejects the push. Copy the changed workflow files into the release repo manually, and in its `sync-template.yml` set the sync default to the release repo (`vars.TEMPLATE_SOURCE_REPO || 'Digiata/Stadium-8'`) so consumers sync from the right source.
 
 ## PR Labels for Release Notes
 

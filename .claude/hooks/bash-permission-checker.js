@@ -422,9 +422,11 @@ for (const pattern of denyPatterns) {
 // These protect against reading credential-like files even inside safe dirs,
 // and cover grep (which the deny-bypass intentionally excludes for broader `.*secret`
 // patterns — quoting "secret" as a grep search term is a legitimate use case).
-// Segment terminator: end-of-string, pipeline `|`, or compound-command `&`/`;`.
-// Lets patterns match the same way whether the command stands alone or appears as a segment.
-const segEnd = '(?:$|\\s*[|&;])';
+// Secret-token boundary (lookahead, non-consuming): the credential-like leaf ends here —
+// followed by whitespace (another argument), end-of-string, pipeline `|`, or compound `&`/`;`.
+// The whitespace case is what catches a secret in a NON-final argument position
+// (e.g. `cat web/.env web/a.ts`), which multi-path read patterns now allow.
+const segEnd = '(?=$|\\s|[|&;])';
 // File leaf beginning with `.env` — require `.env` at a path boundary (after `/`, `\`, or start of file arg)
 // to avoid false positives on files like `web/src/config.env.ts`.
 const dotEnvLeaf = '(?:\\S*[/\\\\])?\\.env(?:\\.\\w+)?';
@@ -458,6 +460,12 @@ const subPath = '[' + subPathCore + '-]';
 const subPathW = '(?:(?!\\.\\.[/\\\\])[' + subPathCore + '-])';  // write-safe: no path traversal
 const subPathQ = '[' + subPathCore + ' -]';                       // subpath chars including space
 const subPathE = '(?:[' + subPathCore + '-]|\\\\ )';              // subpath chars including backslash-escaped space
+const subPathEG = '(?:[' + subPathCore + '*?-]|\\\\ )';           // subPathE + glob chars (* ?) for grep path args like `web/*.ts`
+// A single safe-dir file argument (bare, no spaces). Reused so cat/head/tail/wc can each
+// accept one-or-more file args via `(?:\s+safeReadFile)+` — mirrors grep's multi-path support.
+// No glob chars here on purpose: content-dumping commands must not match dotfile globs
+// (e.g. `cat web/.env*`) that would slip past the .env always-deny rule.
+const safeReadFile = winPath + safeDirsRead + '[/\\\\]' + subPathE + '+["\']?';
 const npmPrefix = '(?:--prefix\\s+' + pathTok + '\\s+)?';
 const envPrefix = '(?:[A-Z_][A-Z0-9_]*=["\']?[\\w./:~= -]+["\']?\\s+)*';  // optional VAR=value prefixes (with optional quotes)
 const cdEnvPrefix = cdPrefix + envPrefix;
@@ -515,16 +523,16 @@ let allowPatterns = [
   cdPrefix + 'mkdir\\s+(?:-p\\s+)?(?:' + winPath + safeDirsRead + '[/\\\\]?' + subPath + '*["\']?\\s*)+$',
 
   // --- File reading (safe directories only; uses safeDirsRead → includes `src` with boundary anchor) ---
-  cdPrefix + 'sed\\s+-n\\s+.+\\s+' + winPath + safeDirsRead + '[/\\\\]' + subPathE + '+["\']?\\s*$',
-  cdPrefix + 'cat\\s+' + winPath + safeDirsRead + '[/\\\\]' + subPathE + '+["\']?\\s*$',
+  cdPrefix + 'sed\\s+-n\\s+.+\\s+' + safeReadFile + '\\s*$',
+  cdPrefix + 'cat(?:\\s+' + safeReadFile + ')+\\s*$',
   cdPrefix + 'cat\\s+node_modules/[\\w@.*/-]+\\.\\w+\\s*$',
-  cdPrefix + 'type\\s+' + winPath + safeDirsRead + '[/\\\\]' + subPathE + '+["\']?\\s*$',
+  cdPrefix + 'type\\s+' + safeReadFile + '\\s*$',
   cdPrefix + 'cat\\s+' + winPath + '[\\w.-]+\\.config\\.[\\w]+["\']?\\s*$',
   cdPrefix + 'type\\s+' + winPath + '[\\w.-]+\\.config\\.[\\w]+["\']?\\s*$',
-  cdPrefix + 'grep' + grepFlags + '\\s+(?:["\'][^"\']*["\']|\\S+)\\s+' + winPath + safeDirsRead + '(?:[/\\\\]' + subPathE + '*)?' + '["\']?\\s*$',
-  cdPrefix + '(head|tail)(?:\\s+[-+]?[\\w]+)*\\s+' + winPath + safeDirsRead + '[/\\\\]' + subPathE + '+["\']?\\s*$',
-  cdPrefix + 'wc(?:\\s+-[lwcmL]+)*\\s+' + winPath + safeDirsRead + '[/\\\\]' + subPathE + '+["\']?\\s*$',
-  cdPrefix + 'diff(?:\\s+--?[\\w-]+)*\\s+' + winPath + safeDirsRead + '[/\\\\]' + subPathE + '+["\']?\\s+' + winPath + safeDirsRead + '[/\\\\]' + subPathE + '+["\']?\\s*$',
+  cdPrefix + 'grep' + grepFlags + '\\s+(?:["\'][^"\']*["\']|\\S+)(?:\\s+' + winPath + safeDirsRead + '(?:[/\\\\]' + subPathEG + '*)?["\']?)+\\s*$',
+  cdPrefix + '(head|tail)(?:\\s+[-+]?[\\w]+)*(?:\\s+' + safeReadFile + ')+\\s*$',
+  cdPrefix + 'wc(?:\\s+-[lwcmL]+)*(?:\\s+' + safeReadFile + ')+\\s*$',
+  cdPrefix + 'diff(?:\\s+--?[\\w-]+)*\\s+' + safeReadFile + '\\s+' + safeReadFile + '\\s*$',
 
   // --- Quoted paths with spaces ---
   cdPrefix + 'sed\\s+-n\\s+.+\\s+["\'][\\w./:~\\\\ ()-]*' + safeDirsRead + '[/\\\\]' + subPathQ + '+["\']\\s*$',
@@ -543,7 +551,7 @@ let allowPatterns = [
   cdPrefix + 'xxd(?:\\s+-[\\w]+(?:\\s+\\d+)?)*\\s*$',
 
   // --- File copy (read from safe dirs, write to write-safe dirs, no path traversal in dest) ---
-  cdPrefix + 'cp(?:\\s+-[\\w]+)*\\s+' + winPath + safeDirsRead + '[/\\\\]' + subPathE + '+["\']?\\s+' + winPath + safeDirsWrite + '[/\\\\]' + subPathW + '+["\']?\\s*$',
+  cdPrefix + 'cp(?:\\s+-[\\w]+)*\\s+' + safeReadFile + '\\s+' + winPath + safeDirsWrite + '[/\\\\]' + subPathW + '+["\']?\\s*$',
   cdPrefix + 'cp(?:\\s+-[\\w]+)*\\s+["\'][\\w./:~\\\\ ()-]*' + safeDirsRead + '[/\\\\]' + subPathQ + '+["\']\\s+["\'][\\w./:~\\\\ ()-]*' + safeDirsWrite + '[/\\\\](?:(?!\\.\\.[/\\\\])[\\w./\\\\ ()-])+["\']\\s*$',
 
   // --- File writing (safe directories only, write-safe subpath blocks ../ traversal) ---
@@ -727,7 +735,20 @@ function testPipelineAllowed(cmdText) {
         break;
       }
     }
-    if (!segAllowed) return false;
+    if (!segAllowed) {
+      // A pipeline segment can itself be a parenthesized subshell, e.g.
+      //   (cd web && npx tsc --noEmit) 2>&1 | tail -5
+      // The trailing redirect is stripped above; if what remains is fully
+      // parenthesized, verify every inner sub-command is independently safe
+      // (deny patterns still apply, via testSubCommandAllowed). splitCompoundCommand
+      // returns null for a single inner command, so fall back to [inner].
+      const parenMatch = /^\s*\((.+)\)\s*$/.exec(seg);
+      if (!parenMatch) return false;
+      const inner = parenMatch[1].trim();
+      for (const ic of splitCompoundCommand(inner) || [inner]) {
+        if (!testSubCommandAllowed(ic)) return false;
+      }
+    }
   }
 
   return true;
