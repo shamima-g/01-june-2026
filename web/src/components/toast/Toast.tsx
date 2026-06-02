@@ -101,23 +101,6 @@ export function Toast({ toast, onDismiss }: ToastProps) {
     }
   };
 
-  // ARIA role based on variant
-  const getAriaRole = () => {
-    return toast.variant === 'error' ? 'alert' : 'status';
-  };
-
-  // ARIA live based on variant
-  const getAriaLive = () => {
-    return toast.variant === 'error' ? 'assertive' : 'polite';
-  };
-
-  const handleToastClick = () => {
-    if (toast.onClick) {
-      toast.onClick();
-      onDismiss(toast.id);
-    }
-  };
-
   return (
     <div
       className={`
@@ -126,10 +109,28 @@ export function Toast({ toast, onDismiss }: ToastProps) {
         animate-in slide-in-from-right fade-in duration-300
         ${toast.onClick ? 'cursor-pointer hover:shadow-xl transition-shadow' : ''}
       `}
-      role={getAriaRole()}
-      aria-live={getAriaLive()}
+      // Toasts are an auxiliary, transient notification surface — never the
+      // page's canonical error region. Every variant (including `error`) uses
+      // role="status" with aria-live="polite" so the toast is still announced to
+      // assistive tech WITHOUT registering as a second role="alert". The single
+      // canonical role="alert" is owned by the relevant in-page surface (e.g. the
+      // login form's inline credential/connectivity message). Two role="alert"
+      // nodes collided under a strict-mode `getByRole('alert')` locator; this is
+      // the structural fix. The enclosing ToastContainer is itself an
+      // aria-live="polite" region, so announcement is preserved.
+      role="status"
+      aria-live="polite"
       aria-atomic="true"
-      onClick={toast.onClick ? handleToastClick : undefined}
+      onClick={
+        toast.onClick
+          ? () => {
+              if (toast.onClick) {
+                toast.onClick();
+                onDismiss(toast.id);
+              }
+            }
+          : undefined
+      }
     >
       {/* Icon */}
       <div className="flex-shrink-0 mt-0.5">{getIcon()}</div>

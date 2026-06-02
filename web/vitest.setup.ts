@@ -1,7 +1,10 @@
 // Learn more: https://github.com/testing-library/jest-dom
 import '@testing-library/jest-dom/vitest';
 
-// Accessibility testing with axe-core
+// Accessibility testing with axe-core. `expect.extend` registers the matchers at
+// runtime; the matching `tsc` type augmentation lives in
+// src/__tests__/vitest-axe.d.ts (Vitest 4 resolves matchers via @vitest/expect's
+// `Matchers` interface, which the package's own `extend-expect` does not target).
 import * as matchers from 'vitest-axe/matchers';
 import { expect } from 'vitest';
 

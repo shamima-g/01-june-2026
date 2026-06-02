@@ -66,3 +66,71 @@ export const createTransactionsEnvelope = (
 export const createUsersEnvelope = (
   items: MockUser[] = [createMockUser()],
 ): { Users: MockUser[] } => ({ Users: items });
+
+/* ------------------------------------------------------------------ *
+ * Story 2 — Sign-in with role-based landing
+ * ------------------------------------------------------------------ */
+
+/**
+ * A single role record as the auth backend returns it within UserInfoRead /
+ * RoleRead (auth-api.yaml components.schemas.RoleRead). The role name drives
+ * post-login routing.
+ */
+export interface MockRole {
+  Id: number;
+  Name: string;
+}
+
+/**
+ * The role-source payload the login flow resolves AFTER a successful
+ * `POST /v1/auth/login`. The brief (§13-E) records `GET /v1/auth/userinfo` as
+ * UNCONFIRMED on the running backend, so the source is intentionally swappable
+ * (userinfo, or a `GET /v1/users` record matched to the signed-in username).
+ * Both candidate sources expose the role the same way — a `RolesString` scalar
+ * and/or a `Roles[]` array — so this factory models the common shape the role
+ * resolver consumes regardless of which endpoint supplied it.
+ */
+export interface MockUserInfo {
+  Id: number;
+  Email: string;
+  FirstName: string;
+  LastName: string;
+  RolesString: string;
+  Roles: MockRole[];
+}
+
+/**
+ * Builds the resolved-user payload for a given role. `RolesString` and the
+ * `Roles[]` array agree on the role name so a resolver reading either field
+ * lands on the same answer. Pass `role` to flip between Importer / Approver;
+ * omit fields via `overrides` to model partial/unknown-role responses.
+ */
+export const createMockUserInfo = (
+  role: string,
+  overrides: Partial<MockUserInfo> = {},
+): MockUserInfo => ({
+  Id: 7,
+  Email: `${role.toLowerCase()}@example.com`,
+  FirstName: 'Sam',
+  LastName: 'Operator',
+  RolesString: role,
+  Roles: [{ Id: 1, Name: role }],
+  ...overrides,
+});
+
+/**
+ * The login endpoint returns a PascalCase `DefaultResponse` envelope
+ * (auth-api.yaml: 200 → DefaultResponse `{ Messages: ["Login successful"] }`).
+ * Critically it does NOT carry the role — confirming the role must be resolved
+ * from a separate source after login. Modelled here so a test can assert the
+ * flow does not naively read a role off the login response.
+ */
+export const createLoginSuccessResponse = (): {
+  Id: number;
+  MessageType: string;
+  Messages: string[];
+} => ({
+  Id: 0,
+  MessageType: 'SUCCESS',
+  Messages: ['Login successful'],
+});
