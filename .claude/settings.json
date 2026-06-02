@@ -70,6 +70,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/record-timing.ps1\" -EventType prompt",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -79,6 +89,16 @@
           {
             "type": "command",
             "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType session_start",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/record-timing.ps1\" -EventType session_start",
             "timeout": 10
           }
         ]
@@ -104,6 +124,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/record-timing.ps1\" -EventType session_end",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PermissionRequest": [
@@ -113,6 +143,16 @@
           {
             "type": "command",
             "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType permission_request",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/record-timing.ps1\" -EventType permission_request",
             "timeout": 10
           }
         ]
@@ -138,6 +178,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/record-timing.ps1\" -EventType subagent_start",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -147,6 +197,16 @@
           {
             "type": "command",
             "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType subagent_stop",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/record-timing.ps1\" -EventType subagent_stop",
             "timeout": 10
           }
         ]
@@ -171,6 +231,16 @@
           {
             "type": "command",
             "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType response",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/record-timing.ps1\" -EventType response",
             "timeout": 10
           }
         ]
@@ -213,6 +283,16 @@
           {
             "type": "command",
             "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/logging/capture-context.ps1\" -EventType pre_tool_use",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".claude/hooks/record-timing.ps1\" -EventType pre_tool_use",
             "timeout": 10
           }
         ]
