@@ -12,7 +12,14 @@ export default defineConfig({
       'src/**/__tests__/**/*.[jt]s?(x)',
       'src/**/?(*.)+(test).[jt]s?(x)',
     ],
-    exclude: ['node_modules/', '**/*.spec.[jt]s'],
+    // `__tests__/helpers/**` holds shared mock-data factories and other test
+    // support modules that are imported BY tests but contain no test suites of
+    // their own — Vitest would otherwise fail them with "No test suite found".
+    exclude: [
+      'node_modules/',
+      '**/*.spec.[jt]s',
+      'src/**/__tests__/helpers/**',
+    ],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{js,jsx,ts,tsx}'],

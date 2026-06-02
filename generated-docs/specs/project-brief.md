@@ -85,7 +85,7 @@ Custom roles: **Importer** and **Approver**. The matrix below is derived from `r
 | Transactions API base URL | `http://localhost:10005/transactions-api` (path prefix is part of the base — do **not** strip it) |
 | Auth scheme | Session cookie (`apiKey` / `in: cookie` / name: `session`) |
 | Cookie attributes | `HttpOnly; Secure; SameSite=Strict; Path=/; ~1 h expiry` |
-| Credential env vars | `TEST_USERNAME`, `TEST_PASSWORD`, `NEXT_PUBLIC_AUTH_API_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL` |
+| Credential env vars | `TEST_USERNAME`, `TEST_PASSWORD` (smoke test). Backend origins are **server-only** (no `NEXT_PUBLIC_` prefix): `AUTH_API_BASE_URL` (auth :10010), `API_BASE_URL` (transactions :10005/transactions-api) — read solely by the same-origin proxy route handler, never inlined into the browser bundle. The browser API client uses same-origin `/api` and needs no backend origin. |
 | Smoke-test login | `POST http://localhost:10010/v1/auth/login` → 200, Set-Cookie established |
 | Smoke-test GET /v1/transactions | 200, envelope `{"Transactions":[...]}` |
 | Smoke-test GET /v1/users | 200, envelope `{"Users":[...]}` |

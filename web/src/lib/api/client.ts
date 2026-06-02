@@ -1,16 +1,19 @@
 /**
- * Base API Client Template
+ * Base API Client
  *
  * A reusable fetch wrapper providing:
- * - Error handling for common HTTP status codes
- * - Automatic JSON parsing
+ * - Error handling for common HTTP status codes (always surfaced as a typed APIError)
+ * - Automatic JSON parsing + PascalCase single-key envelope unwrapping
+ * - Same-origin requests with credentials always included (session-cookie auth)
  * - Request/response logging for development
  * - Type-safe API responses
  *
- * USAGE:
- * 1. Update API_BASE_URL in constants.ts or environment variables
- * 2. Define your API endpoints as functions that call apiClient
- * 3. Customize error handling and logging as needed
+ * Auth model (this project): the session cookie is set by the backend and
+ * relayed by the Next.js proxy (web/src/app/api/[...proxy]/route.ts). It is
+ * HttpOnly + SameSite=Strict, so JavaScript can neither read nor attach it —
+ * it rides along automatically on every same-origin request because we set
+ * `credentials: 'include'` here. All endpoints are therefore same-origin
+ * `/api/*` paths (API_BASE_URL is empty), never cross-origin backend hosts.
  */
 
 import { API_BASE_URL } from '@/lib/utils/constants';
@@ -25,9 +28,9 @@ import type {
 /**
  * Main API client function that wraps fetch with error handling and logging
  *
- * @param endpoint - API endpoint path (e.g., '/v1/resource')
+ * @param endpoint - Same-origin API path (e.g., '/api/transactions/v1/transactions')
  * @param config - Request configuration including method, body, headers, etc.
- * @returns Promise with parsed JSON response
+ * @returns Promise with parsed JSON response (collections unwrapped from their envelope)
  * @throws APIError on HTTP errors or network failures
  */
 export async function apiClient<T = unknown>(
@@ -61,6 +64,11 @@ export async function apiClient<T = unknown>(
     const response = await fetch(url, {
       ...fetchConfig,
       headers,
+      // Always send credentials so the same-origin session cookie (relayed by
+      // the proxy from the backend's Set-Cookie) accompanies every request
+      // (NFR7). The cookie is HttpOnly + SameSite=Strict, so it can only ride
+      // along on a same-origin request with credentials included.
+      credentials: 'include',
       body: fetchConfig.body ?? undefined,
     });
 
@@ -172,6 +180,11 @@ function buildHeaders(
 
   // Inject auth header when the caller asked for it and the header is configured
   // via env vars captured during INTAKE Step 4b. Caller-provided headers win.
+  //
+  // NOTE: this project authenticates via the same-origin session cookie
+  // (credentials: 'include'), NOT a header token, so production callers never
+  // set requiresAuth. The mechanism is retained as an opt-in for the rare
+  // header-token endpoint and to keep the client reusable.
   if (requiresAuth) {
     const authHeader = getAuthHeader();
     if (authHeader && !(authHeader.name in baseHeaders)) {
@@ -215,8 +228,13 @@ export function getAuthHeader(): { name: string; value: string } | null {
 }
 
 /**
- * Handles error responses from the API
- * Customize this function based on your API's error response format
+ * Handles error responses from the API.
+ *
+ * Always throws a typed APIError carrying the status code and any backend-
+ * supplied messages — callers never see a raw Response or unhandled throw
+ * (AC-5). The live backend wraps mutation/error payloads in a `Messages`
+ * array (and sometimes RFC 7807 problem+json on the transactions API); we
+ * surface `Messages` when present and fall back to a status-based message.
  */
 async function handleErrorResponse(
   response: Response,
@@ -298,9 +316,14 @@ async function handleErrorResponse(
 }
 
 /**
- * Handles successful API responses
- * Parses JSON or returns void for 204 No Content responses
- * For binary responses, returns a Blob
+ * Handles successful API responses.
+ *
+ * Parses JSON or returns void for 204; returns a Blob for binary responses.
+ * For JSON object responses that are a PascalCase single-key collection
+ * envelope (e.g. `{ "Transactions": [...] }`, `{ "Users": [...] }`,
+ * `{ "FileLog": [...] }`), the envelope is unwrapped to the bare array before
+ * the caller sees it (project-brief §6 + §13.C). Non-envelope objects (e.g.
+ * a `{ Id, MessageType, Messages }` mutation response) pass through unchanged.
  */
 async function handleSuccessResponse<T>(
   response: Response,
@@ -320,7 +343,7 @@ async function handleSuccessResponse<T>(
 
   // Handle JSON responses
   if (contentType && contentType.includes('application/json')) {
-    return (await response.json()) as T;
+    return unwrapEnvelope(await response.json()) as T;
   }
 
   // Handle binary responses (e.g., file downloads)
@@ -330,11 +353,41 @@ async function handleSuccessResponse<T>(
 
   // Fallback: try to parse as JSON
   try {
-    return (await response.json()) as T;
+    return unwrapEnvelope(await response.json()) as T;
   } catch {
     // If JSON parsing fails, return undefined
     return undefined as T;
   }
+}
+
+/**
+ * Unwraps a PascalCase single-key collection envelope to its inner array.
+ *
+ * The live backend returns collections wrapped in a single PascalCase key
+ * matching the resource name, e.g. `{ "Transactions": [...] }`. We unwrap only
+ * when the payload is a plain object with EXACTLY one own enumerable key whose
+ * value is an array — that is unambiguously the collection envelope. Anything
+ * else (arrays, scalars, multi-key objects like the `{ Id, MessageType,
+ * Messages }` mutation response, single-object reads) passes through untouched.
+ */
+function unwrapEnvelope(payload: unknown): unknown {
+  if (
+    payload === null ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload)
+  ) {
+    return payload;
+  }
+
+  const keys = Object.keys(payload as Record<string, unknown>);
+  if (keys.length === 1) {
+    const value = (payload as Record<string, unknown>)[keys[0]];
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+
+  return payload;
 }
 
 /**

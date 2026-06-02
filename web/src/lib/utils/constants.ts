@@ -6,12 +6,22 @@
  */
 
 /**
- * API base URL - Retrieved from environment variable
- * Set NEXT_PUBLIC_API_BASE_URL in your .env.local file
- * Default: http://localhost:8042 (adjust as needed)
+ * Browser-side API base URL.
+ *
+ * Empty by design: the browser API client issues every request to a
+ * SAME-ORIGIN `/api/*` path (see web/src/app/api/[...proxy]/route.ts). The
+ * real backend origins are server-side only — `AUTH_API_BASE_URL` (auth
+ * :10010) and `API_BASE_URL` (transactions :10005/transactions-api) are
+ * consumed by the proxy route handler, never by browser fetch URLs. These vars
+ * deliberately omit the `NEXT_PUBLIC_` prefix so Next.js does NOT inline them
+ * into the browser bundle (which would leak the backend origins client-side).
+ * The session cookie is `SameSite=Strict`, so any cross-origin browser fetch
+ * would be rejected — keeping the client same-origin is mandatory (NFR7).
+ *
+ * Endpoint functions therefore pass full same-origin paths to the client,
+ * e.g. `get('/api/transactions/v1/transactions')`.
  */
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8042';
+export const API_BASE_URL = '';
 
 /**
  * Default pagination settings
