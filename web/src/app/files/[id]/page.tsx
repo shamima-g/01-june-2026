@@ -1,45 +1,48 @@
 'use client';
 
 /**
- * File detail surface (Epic 2, Story 2 — R3, BR4).
+ * File detail surface (Epic 2, Stories 2 + 4 — R3, BR4, R11, R13, BR5).
  *
- * Replaces the Story 1 navigation placeholder with the production detail view:
- * one FileLog's metadata + the read-only slice of Transactions belonging to it.
- * Renders identically for both personas (Importer, Approver) and carries no
- * action controls of its own — Stories 3-5 hang Importer-only actions on this
- * shared shell.
+ * Story 2 established the shared detail shell: one FileLog's metadata + the
+ * read-only slice of Transactions belonging to it, with a work-in-progress
+ * banner for an Uploaded/Processing file, a not-found path, and an independently
+ * retryable transactions read.
+ *
+ * Story 4 EXTENDS that shell for a `Failed` file (BR5) without disturbing any of
+ * the above:
+ *   - When the derived File Status is `Failed`, the page fetches the validation-
+ *     error column metadata (`GET /v1/files/validation-errors/columns?FileLogId=`,
+ *     a `{ ColumnList: [...] }` envelope the client unwraps to a bare array) and
+ *     the invalid rows (`GET /v1/files/validation-errors?FileLogId=`, a nested
+ *     `{ ValidationErrors: { JsonArray: "<stringified[]>" } }` the page parses —
+ *     §13-C) and renders an invalid-row grid headed by each VISIBLE column's
+ *     `HeaderText` (R13). A `Visible:false` column does not render.
+ *   - An Importer (and only an explicitly-resolved Importer — fail-closed) sees a
+ *     "Retry Validation" control on a Failed file (BR5). Clicking it POSTs
+ *     `/v1/files/retry-validation?LogId=`, then re-resolves the FileLog (so the
+ *     File Status flips to a non-failed state on success — R11) and refreshes the
+ *     invalid-row list (so a continued failure shows the updated rows — R11). The
+ *     Approver sees the same error list read-only with no Retry control.
+ *   - A failed validation-errors LOAD surfaces a user-visible error state
+ *     (role="alert") with a wired retry affordance (AC-4 / NFR5) rather than a
+ *     blank/broken grid.
  *
  * How the data resolves (spec gaps — story summary):
  *   - The spec has NO single-FileLog fetch, so the page resolves the viewed
  *     FileLog from the active file-logs LIST
  *     (`GET /api/transactions/v1/file-logs?IsActive=Yes`, the client unwraps the
  *     singular `{ FileLog: [...] }` envelope) and matches by `Id`. An id absent
- *     from that `?IsActive=Yes` list is the not-found path (AC-4) — a
- *     non-existent OR an inactive file is likewise absent.
+ *     from that `?IsActive=Yes` list is the not-found path — a non-existent OR an
+ *     inactive file is likewise absent.
  *   - `GET /api/transactions/v1/transactions` takes NO `FileLogId` filter param,
  *     so the page fetches ALL transactions and filters CLIENT-SIDE by
  *     `FileLogId` (`transactionsForFile`).
  *
- * The two reads are INDEPENDENTLY retryable: the file-logs read resolves the
- * FileLog (and its derived File Status badge + work-in-progress banner), while
- * the transactions read populates the slice. A failed transactions fetch (with
- * the FileLog itself healthy) surfaces a user-visible error state with a Retry
- * affordance (AC-5 / NFR5) without blanking the file header.
- *
- * Behaviours:
- *   - BR4 / AC-2: when the derived File Status is `Uploaded` or `Processing`, a
- *     work-in-progress banner (role="status") tells the user the dataset is not
- *     yet final. A `Completed`/`Failed` file shows no banner.
- *   - AC-3: a file with zero transactions shows the shared zero-data EmptyState
- *     (no-data variant — no clear-filters control, no empty grid).
- *   - AC-1: the file's name (heading) + derived File Status badge + the
- *     read-only transaction slice (own FileLogId only).
- *
  * Wrapped in RequireSession (Epic 1, Story 3) so a signed-out user is bounced to
- * `/login`. The route param is a Promise in Next 16; it is resolved in the same
- * mount effect that kicks off the file-logs read (rather than `use(params)`) so
- * the param-resolution never suspends the tree — keeping the surface testable
- * under React Testing Library while honouring the Next 16 async-params contract.
+ * `/login`. The route param is a Promise in Next 16; it is resolved in a mount
+ * effect (rather than `use(params)`) so param-resolution never suspends the tree
+ * — keeping the surface testable under React Testing Library while honouring the
+ * Next 16 async-params contract.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -58,7 +61,19 @@ import {
 } from '@/components/ui/table';
 import { getActiveFileLogs, deriveFileStatus } from '@/lib/api/file-logs';
 import { getTransactions, transactionsForFile } from '@/lib/api/transactions';
-import { FileStatus, type FileLog, type Transaction } from '@/types/api';
+import {
+  getValidationColumns,
+  getValidationErrors,
+  retryValidation,
+} from '@/lib/api/validation-errors';
+import { fetchCurrentRole, asKnownRole } from '@/lib/auth/roles';
+import {
+  FileStatus,
+  type FileLog,
+  type InvalidRow,
+  type Transaction,
+  type ValidationColumn,
+} from '@/types/api';
 
 /** Statuses for which the dataset is still settling (BR4 / AC-2). */
 const WORK_IN_PROGRESS_STATUSES = new Set<string>([
@@ -91,9 +106,12 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
   // loading window — avoids a separate param-only render gate.
   const [id, setId] = useState<number | null>(null);
 
-  // File-logs read: resolves the viewed FileLog from the active list.
+  // File-logs read: resolves the viewed FileLog from the active list. Re-runs
+  // when `fileNonce` is bumped (a successful retry re-reads it to pick up the
+  // flipped File Status — R11).
   const [fileState, setFileState] = useState<LoadState>('loading');
   const [fileLog, setFileLog] = useState<FileLog | null>(null);
+  const [fileNonce, setFileNonce] = useState(0);
 
   // Transactions read: independently retryable. We keep the full set in state
   // and derive the file's slice with a memo so a retry only re-runs the fetch.
@@ -101,22 +119,44 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [txNonce, setTxNonce] = useState(0);
 
-  // Resolve the route param, then the FileLog by Id from the active file-logs
-  // list. The effect body holds only the async side-effect; state resolves in
-  // the promise callbacks (react-hooks/set-state-in-effect). The two reads run
-  // concurrently — the transactions read does not wait on the id.
+  // Role gating (BR5): the Retry Validation control is Importer-only and
+  // fail-closed — only an explicitly-resolved Importer sees it; a null/Approver
+  // role hides it. Resolved once on mount via the swappable role source.
+  const [role, setRole] = useState<string | null>(null);
+
+  // Validation-errors view (only loaded for a Failed file): the column metadata
+  // + the parsed invalid rows. `veNonce` re-runs the read (the load-error retry
+  // affordance AND a retry-validation re-run both bump it — R11 / AC-4).
+  const [veState, setVeState] = useState<LoadState>('loading');
+  const [columns, setColumns] = useState<ValidationColumn[]>([]);
+  const [invalidRows, setInvalidRows] = useState<InvalidRow[]>([]);
+  const [veNonce, setVeNonce] = useState(0);
+
+  // True while the retry-validation POST is in flight (disables the control).
+  const [retrying, setRetrying] = useState(false);
+
+  // Resolve the route param once on mount (independent of the data reads so a
+  // file-logs re-read on retry never re-resolves the param).
   useEffect(() => {
     let active = true;
-    void params
-      .then(({ id: raw }) => {
-        const resolvedId = Number(raw);
-        if (active) setId(resolvedId);
-        return getActiveFileLogs().then((logs) => ({ resolvedId, logs }));
-      })
-      .then(({ resolvedId, logs }) => {
+    void params.then(({ id: raw }) => {
+      if (active) setId(Number(raw));
+    });
+    return () => {
+      active = false;
+    };
+  }, [params]);
+
+  // File-logs read — resolves the viewed FileLog by Id from the active list.
+  // Re-runs on `fileNonce` (post-retry re-read) once the id is known.
+  useEffect(() => {
+    if (id === null) return;
+    let active = true;
+    getActiveFileLogs()
+      .then((logs) => {
         if (!active) return;
         const match = Array.isArray(logs)
-          ? (logs.find((log) => Number(log.Id) === resolvedId) ?? null)
+          ? (logs.find((log) => Number(log.Id) === id) ?? null)
           : null;
         setFileLog(match);
         setFileState('ready');
@@ -127,7 +167,7 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
     return () => {
       active = false;
     };
-  }, [params]);
+  }, [id, fileNonce]);
 
   // Fetch all transactions (re-runs on retry via txNonce). The slice is derived
   // below from the full set + the resolved FileLogId.
@@ -147,17 +187,90 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
     };
   }, [txNonce]);
 
-  // User-driven retry of the transactions read only — reset to loading and
-  // re-trigger the fetch effect (event handler, so this setState is lint-safe).
+  // Resolve the signed-in role once on mount. A failed resolve leaves `role`
+  // null, which HIDES the Retry control (fail-closed for a privileged action).
+  useEffect(() => {
+    let active = true;
+    void fetchCurrentRole().then((resolved) => {
+      if (active) setRole(resolved);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const status = fileLog ? deriveFileStatus(fileLog) : null;
+  const isFailed = status === FileStatus.Failed;
+
+  // Validation-errors read — only for a Failed file. Loads the column metadata
+  // and the parsed invalid rows together; either rejecting surfaces the load-
+  // error state (AC-4). Re-runs on `veNonce` (error retry / retry-validation).
+  useEffect(() => {
+    if (id === null || !isFailed) return;
+    let active = true;
+    setVeState('loading');
+    Promise.all([getValidationColumns(id), getValidationErrors(id)])
+      .then(([cols, rows]) => {
+        if (!active) return;
+        setColumns(Array.isArray(cols) ? cols : []);
+        setInvalidRows(Array.isArray(rows) ? rows : []);
+        setVeState('ready');
+      })
+      .catch(() => {
+        if (active) setVeState('error');
+      });
+    return () => {
+      active = false;
+    };
+  }, [id, isFailed, veNonce]);
+
+  // User-driven retry of the transactions read only.
   function handleRetryTransactions() {
     setTxState('loading');
     setTxNonce((n) => n + 1);
+  }
+
+  // User-driven retry of the validation-errors LOAD (the error-state affordance,
+  // AC-4) — re-attempts the columns + rows fetch.
+  function handleRetryValidationErrors() {
+    setVeNonce((n) => n + 1);
+  }
+
+  // Importer-only Retry Validation (R11): POST retry-validation, then re-read the
+  // FileLog (status may flip to a non-failed state) and refresh the invalid-row
+  // list (continued-failure path). An event handler, so the setState calls here
+  // are lint-safe.
+  async function handleRetryValidation() {
+    if (id === null) return;
+    setRetrying(true);
+    try {
+      await retryValidation(id);
+    } catch {
+      // The mutation failed outright; we still re-read the FileLog + rows below
+      // so the surface reflects the backend's current state rather than stalling.
+    } finally {
+      setRetrying(false);
+      // Re-resolve the FileLog (status flip on success) and refresh the rows
+      // (continued-failure path). The validation-errors effect re-runs off
+      // `veNonce`; if the status flips away from Failed it simply stops rendering.
+      setFileNonce((n) => n + 1);
+      setVeNonce((n) => n + 1);
+    }
   }
 
   const slice = useMemo(
     () => (id === null ? [] : transactionsForFile(transactions, id)),
     [transactions, id],
   );
+
+  // Only the VISIBLE columns render — a `Visible:false` column contributes
+  // neither a heading nor a cell (R13).
+  const visibleColumns = useMemo(
+    () => columns.filter((col) => col.Visible),
+    [columns],
+  );
+
+  const isImporter = asKnownRole(role) === 'Importer';
 
   // Both reads (and the param) in flight on first mount: a single progressbar
   // gates the page so the tests' "wait for progressbar gone" helper settles on
@@ -204,8 +317,7 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
   }
 
   // Resolved the active list but the id wasn't in it — non-existent OR inactive
-  // (the list is ?IsActive=Yes). A clear, human not-found message (AC-4), not a
-  // crash or a generic error page.
+  // (the list is ?IsActive=Yes). A clear, human not-found message, not a crash.
   if (!fileLog) {
     return (
       <main className="container mx-auto px-4 py-8">
@@ -220,8 +332,8 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
     );
   }
 
-  const status = deriveFileStatus(fileLog);
-  const isWorkInProgress = WORK_IN_PROGRESS_STATUSES.has(status);
+  const resolvedStatus = status ?? FileStatus.Uploaded;
+  const isWorkInProgress = WORK_IN_PROGRESS_STATUSES.has(resolvedStatus);
 
   return (
     <main className="container mx-auto px-4 py-8">
@@ -229,12 +341,23 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
         <div className="flex flex-col gap-2">
           <h1 className="text-2xl font-semibold">{fileLog.CurrentFileName}</h1>
           <div className="flex items-center gap-2">
-            <StatusBadge status={status} />
+            <StatusBadge status={resolvedStatus} />
             <span className="text-muted-foreground text-sm">
               {Number(fileLog.RecordCount) || 0} records
             </span>
           </div>
         </div>
+
+        {/* Importer-only Retry Validation control on a Failed file (BR5, R11). */}
+        {isFailed && isImporter && (
+          <Button
+            type="button"
+            onClick={handleRetryValidation}
+            disabled={retrying}
+          >
+            {retrying ? 'Retrying validation…' : 'Retry Validation'}
+          </Button>
+        )}
       </header>
 
       {isWorkInProgress && (
@@ -246,6 +369,81 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
           This file is still being processed — its transactions are not yet
           final and may change.
         </div>
+      )}
+
+      {/* Failed file: the validation-errors view (R13, BR5). */}
+      {isFailed && (
+        <section aria-label="Validation errors" className="mb-8">
+          <h2 className="mb-3 text-lg font-semibold">Validation errors</h2>
+
+          {veState === 'loading' && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="text-muted-foreground flex items-center justify-center py-12 text-sm"
+            >
+              <span
+                role="progressbar"
+                aria-label="Loading validation errors"
+                aria-busy="true"
+                className="border-muted-foreground/30 border-t-primary size-6 animate-spin rounded-full border-2"
+              />
+              <span className="sr-only">Loading validation errors…</span>
+            </div>
+          )}
+
+          {veState === 'error' && (
+            <div
+              role="alert"
+              className="border-destructive/40 bg-destructive/10 flex flex-col items-center gap-3 rounded-lg border px-6 py-12 text-center"
+            >
+              <p className="text-destructive text-sm font-medium">
+                We couldn&apos;t load the validation errors for this file.
+                Please check your connection and try again.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleRetryValidationErrors}
+              >
+                Try again
+              </Button>
+            </div>
+          )}
+
+          {veState === 'ready' && invalidRows.length === 0 && (
+            <EmptyState
+              variant="no-data"
+              title="No validation errors"
+              message="This file is marked as failed but reported no invalid rows."
+            />
+          )}
+
+          {veState === 'ready' && invalidRows.length > 0 && (
+            <div className="rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    {visibleColumns.map((col) => (
+                      <TableHead key={col.Name}>{col.HeaderText}</TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {invalidRows.map((row, rowIndex) => (
+                    <TableRow key={row.Reference ?? rowIndex}>
+                      {visibleColumns.map((col) => (
+                        <TableCell key={col.Name}>
+                          {row[col.Name] ?? ''}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </section>
       )}
 
       {txState === 'error' && (
@@ -267,7 +465,7 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
         </div>
       )}
 
-      {txState === 'ready' && slice.length === 0 && (
+      {txState === 'ready' && slice.length === 0 && !isFailed && (
         <EmptyState
           variant="no-data"
           title="No transactions yet"

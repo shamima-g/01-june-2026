@@ -74,8 +74,8 @@ export const createMockFileLog = (
  * The File Log collection as the live backend returns it: a single-key
  * PascalCase envelope under the SINGULAR `FileLog` key. The API client under
  * test unwraps this to a bare `MockFileLog[]` before the page receives it — so
- * page-level mocks of `get()` should resolve the UNWRAPPED array (what the page
- * actually sees), while envelope-aware tests of the client use this factory.
+ * page-level mocks of `get()` should resolve the UNWRAPPED array, while
+ * envelope-aware tests of the client use this factory.
  */
 export const createFileLogEnvelope = (
   items: MockFileLog[] = [createMockFileLog()],
@@ -307,3 +307,150 @@ export const createMockFileSettingList = (): MockFileSetting[] => [
 export const createFileSettingEnvelope = (
   items: MockFileSetting[] = [createMockFileSetting()],
 ): { FileSettings: MockFileSetting[] } => ({ FileSettings: items });
+
+/* -------------------------------------------------------------------------- */
+/* Validation errors + columns (Epic 2, Story 4 — R11, R13, BR5)              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A single column-definition record for the validation-errors grid, matching
+ * `documentation/transactions-api.yaml` → `components.schemas.ColumnDefinition`
+ * (operation `FileValidationErrorColumnGetList` on
+ * `GET /v1/files/validation-errors/columns`). No api-shape-report.md exists for
+ * this build, so the spec schema is authoritative.
+ *
+ * Shape notes the validation-errors view honours:
+ *   - The list arrives under the SINGULAR-keyed `{ ColumnList: [...] }` envelope
+ *     (spec `ColumnList.ColumnList`) whose value is an ARRAY — so the API
+ *     client's single-key unwrap strips it to a bare `MockValidationColumn[]`
+ *     before the page sees it (page-level mocks of `get()` resolve the UNWRAPPED
+ *     array).
+ *   - `HeaderText` is the human-facing column heading the grid renders; `Name`
+ *     keys into each invalid-row object (the JsonArray records). The view binds
+ *     headings from `HeaderText` and reads each row cell by `Name`.
+ */
+export interface MockValidationColumn {
+  Name: string;
+  HeaderText: string;
+  Visible: boolean;
+  CellAlignment: string;
+  CellDisplay: string;
+  Classes: string;
+}
+
+/**
+ * Builds a single column definition. Defaults model a visible left-aligned text
+ * column; pass `overrides` to vary the `Name`/`HeaderText` the grid keys on and
+ * renders.
+ */
+export const createMockValidationColumn = (
+  overrides: Partial<MockValidationColumn> = {},
+): MockValidationColumn => ({
+  Name: 'Name',
+  HeaderText: 'Name',
+  Visible: true,
+  CellAlignment: 'left',
+  CellDisplay: 'text',
+  Classes: 'col-name',
+  ...overrides,
+});
+
+/**
+ * A spread of column definitions with distinct `Name`/`HeaderText` pairs so a
+ * test can assert the grid renders the BACKEND-supplied headings (`HeaderText`)
+ * rather than a hard-coded column set — and key each invalid row by `Name`.
+ */
+export const createMockValidationColumns = (): MockValidationColumn[] => [
+  createMockValidationColumn({ Name: 'Reference', HeaderText: 'Reference' }),
+  createMockValidationColumn({
+    Name: 'Amount',
+    HeaderText: 'Amount',
+    CellAlignment: 'right',
+    CellDisplay: 'number',
+  }),
+  createMockValidationColumn({ Name: 'Error', HeaderText: 'Error Detail' }),
+];
+
+/**
+ * The column collection as the live backend returns it: the single-key
+ * PascalCase `{ ColumnList: [...] }` envelope whose value is an array. The API
+ * client unwraps this to a bare `MockValidationColumn[]` before the page sees it
+ * — so page-level mocks of `get()` resolve the UNWRAPPED array, while
+ * envelope-aware client tests use this factory.
+ */
+export const createColumnListEnvelope = (
+  items: MockValidationColumn[] = createMockValidationColumns(),
+): { ColumnList: MockValidationColumn[] } => ({ ColumnList: items });
+
+/**
+ * A single invalid-row object as it appears INSIDE the JsonArray string. Keys
+ * align with the column `Name`s above so the grid can read each cell by column
+ * `Name`. The spec example (a Bison row) carries arbitrary per-table columns; we
+ * model transaction-flavoured keys so the fixture reads as a realistic failed
+ * transaction file while preserving the same string-encoded-array shape.
+ */
+export interface MockInvalidRow {
+  Reference: string;
+  Amount: string;
+  Error: string;
+  [extra: string]: string;
+}
+
+/**
+ * Builds a spread of invalid-row objects (the PARSED contents of JsonArray).
+ * Distinct References so `within(row)` lookups never collide.
+ */
+export const createMockInvalidRows = (count = 2): MockInvalidRow[] =>
+  Array.from({ length: count }, (_, i) => {
+    const n = String(i + 1).padStart(3, '0');
+    return {
+      Reference: `BADTXN-${n}`,
+      Amount: i % 2 === 0 ? 'not-a-number' : '',
+      Error: i % 2 === 0 ? 'Amount is not numeric' : 'Amount is required',
+    };
+  });
+
+/**
+ * The validation-errors payload EXACTLY as the page receives it from the API
+ * client. CRITICAL shape note (spec `components.schemas.ValidationErrors` +
+ * the client's `unwrapEnvelope`):
+ *
+ *   - The backend returns `{ ValidationErrors: { JsonArray: "<stringified[]>" } }`.
+ *   - The client's single-key unwrap ONLY strips a key whose value is an ARRAY;
+ *     here the single `ValidationErrors` key's value is an OBJECT, so the
+ *     envelope PASSES THROUGH UNTOUCHED. The page therefore receives the full
+ *     `{ ValidationErrors: { JsonArray } }` object — NOT a bare array — and is
+ *     responsible for reaching into `.ValidationErrors.JsonArray` and
+ *     `JSON.parse`-ing that STRING into the invalid-row array (R13, §13-C).
+ *
+ * So a page-level mock of `get()` for the validation-errors endpoint must
+ * resolve THIS factory's output (the un-unwrapped object with a STRING
+ * `JsonArray`), letting the test prove the page does the parse/unwrap rather
+ * than the fixture pre-parsing it for the page.
+ */
+export const createValidationErrorsResponse = (
+  rows: MockInvalidRow[] = createMockInvalidRows(),
+): { ValidationErrors: { JsonArray: string } } => ({
+  ValidationErrors: { JsonArray: JSON.stringify(rows) },
+});
+
+/**
+ * A retry-validation mutation response in observed PascalCase shape, matching
+ * `documentation/transactions-api.yaml` → `components.schemas.DefaultResponse`
+ * (operation `FilesRetryValidation` on `POST /v1/files/retry-validation`). This
+ * is a multi-key object, so the client's single-key unwrap leaves it untouched —
+ * the caller sees `{ Id, MessageType, Messages }` verbatim. Defaults model a
+ * success; pass `overrides` for a continued-failure message.
+ */
+export const createMockRetryResponse = (
+  overrides: Partial<{
+    Id: number;
+    MessageType: string;
+    Messages: string[];
+  }> = {},
+): { Id: number; MessageType: string; Messages: string[] } => ({
+  Id: 0,
+  MessageType: 'SUCCESS',
+  Messages: ['Validation re-run completed'],
+  ...overrides,
+});

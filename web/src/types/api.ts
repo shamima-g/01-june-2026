@@ -193,3 +193,51 @@ export interface FileSetting {
   Direction: string;
   IsActive: boolean;
 }
+
+/**
+ * ValidationColumn — a column-metadata record describing one column of the
+ * validation-errors grid for a `Failed` File Log (Epic 2, Story 4 — R13). Maps
+ * to the transactions-api `ColumnDefinition` schema (operation
+ * `FileValidationErrorColumnGetList` on
+ * `GET /v1/files/validation-errors/columns`).
+ *
+ * Field-shape notes the validation-errors view must honour:
+ *   - The collection arrives wrapped in the SINGULAR `{ ColumnList: [...] }`
+ *     envelope whose value is an ARRAY, so the API client unwraps it to a bare
+ *     `ValidationColumn[]` before any caller sees it (project-brief §6 / §13.C).
+ *   - `HeaderText` is the human-facing column heading the grid renders;
+ *     `Name` keys into each invalid-row object (the parsed JsonArray records).
+ *   - A column with `Visible: false` must NOT render — neither its heading nor
+ *     its cells.
+ */
+export interface ValidationColumn {
+  Name: string;
+  HeaderText: string;
+  Visible: boolean;
+  CellAlignment: string;
+  CellDisplay: string;
+  Classes: string;
+}
+
+/**
+ * InvalidRow — a single parsed invalid-row record from the validation-errors
+ * payload (Epic 2, Story 4 — R13). The backend returns the rows as a STRINGIFIED
+ * JSON array nested under `{ ValidationErrors: { JsonArray: "<stringified[]>" } }`
+ * (a single key whose value is an OBJECT, so the client's array-only single-key
+ * unwrap leaves it intact — the page reaches into `.ValidationErrors.JsonArray`
+ * and `JSON.parse`-s the STRING — project-brief §13-C).
+ *
+ * Each parsed row is an open string-keyed map: the keys align with the columns'
+ * `Name` values, and the grid reads each cell by column `Name`.
+ */
+export type InvalidRow = Record<string, string>;
+
+/**
+ * The validation-errors payload EXACTLY as the API client hands it back: the
+ * un-unwrapped `{ ValidationErrors: { JsonArray } }` object (the single key's
+ * value is an object, not an array, so the client does not strip it —
+ * project-brief §6 / §13.C).
+ */
+export interface ValidationErrorsResponse {
+  ValidationErrors: { JsonArray: string };
+}
