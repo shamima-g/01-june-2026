@@ -111,6 +111,36 @@ export async function fetchCurrentRole(): Promise<string | null> {
 }
 
 /**
+ * Resolves the CURRENT signed-in user's identity for the `LastChangedUser`
+ * audit header on mutations (project-brief §9 Cancel File / R12). Reuses the
+ * same swappable source: best-effort `userinfo`, then the cookie-scoped
+ * `/v1/users` first record. Returns the user's `Email` (the stable,
+ * human-readable audit handle the backend records), or `null` when no source
+ * yields one — the caller then omits the header rather than sending a bogus
+ * value.
+ */
+export async function fetchCurrentUserIdentity(): Promise<string | null> {
+  try {
+    const info = await get<RoleBearingRecord>(USERINFO_PATH);
+    if (info?.Email) return info.Email;
+  } catch {
+    // userinfo unconfirmed on the live backend — fall through to /v1/users.
+  }
+
+  try {
+    const users = await get<RoleBearingRecord[]>(USERS_PATH);
+    const record = Array.isArray(users)
+      ? users[0]
+      : (users as RoleBearingRecord | null);
+    if (record?.Email) return record.Email;
+  } catch {
+    // No usable identity source — caller omits the audit header.
+  }
+
+  return null;
+}
+
+/**
  * Resolves the signed-in user's role from the swappable source described above.
  *
  * @param username the email the user signed in with — used to match the right

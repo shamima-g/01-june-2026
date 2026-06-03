@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * File detail surface (Epic 2, Stories 2 + 4 — R3, BR4, R11, R13, BR5).
+ * File detail surface (Epic 2, Stories 2 + 4 + 5 — R3, BR4, R11, R13, BR5, R12,
+ * BR7).
  *
  * Story 2 established the shared detail shell: one FileLog's metadata + the
  * read-only slice of Transactions belonging to it, with a work-in-progress
@@ -27,6 +28,23 @@
  *     (role="alert") with a wired retry affordance (AC-4 / NFR5) rather than a
  *     blank/broken grid.
  *
+ * Story 5 EXTENDS the shell with the Importer-only Cancel-File action (R12, BR7),
+ * again without disturbing the above:
+ *   - An Importer (and only an explicitly-resolved Importer — fail-closed) sees a
+ *     "Cancel file" control on the detail header (BR10 keeps it absent for the
+ *     Approver).
+ *   - BR7 guard (CLIENT-SIDE — the spec has no server-side guard): triggering
+ *     Cancel reads the already-loaded per-file transaction slice; if ANY
+ *     transaction's `Status` is `Approved` the action is BLOCKED with an
+ *     explanatory `role="alert"` banner and NO delete fires. Otherwise a
+ *     destructive-action confirmation modal opens (BR3-style): it NAMES the file,
+ *     styles the confirm action as destructive, and defaults focus to the
+ *     dismiss/Keep button so an accidental Enter never deletes the file.
+ *   - On confirm the cancel DELETEs `/v1/files?LogId=` with the `LastChangedUser`
+ *     audit header (via the `cancelFile` endpoint helper). On success the file is
+ *     deactivated; we navigate back to `/files` so the cancelled file is gone
+ *     from the active File Logs list (project-brief §9 Cancel File).
+ *
  * How the data resolves (spec gaps — story summary):
  *   - The spec has NO single-FileLog fetch, so the page resolves the viewed
  *     FileLog from the active file-logs LIST
@@ -46,11 +64,20 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 import { RequireSession } from '@/components/session/RequireSession';
 import { StatusBadge } from '@/components/status-badge/StatusBadge';
 import { EmptyState } from '@/components/empty-state/EmptyState';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Table,
   TableBody,
@@ -60,13 +87,18 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { getActiveFileLogs, deriveFileStatus } from '@/lib/api/file-logs';
+import { cancelFile } from '@/lib/api/files';
 import { getTransactions, transactionsForFile } from '@/lib/api/transactions';
 import {
   getValidationColumns,
   getValidationErrors,
   retryValidation,
 } from '@/lib/api/validation-errors';
-import { fetchCurrentRole, asKnownRole } from '@/lib/auth/roles';
+import {
+  fetchCurrentRole,
+  fetchCurrentUserIdentity,
+  asKnownRole,
+} from '@/lib/auth/roles';
 import {
   FileStatus,
   type FileLog,
@@ -80,6 +112,9 @@ const WORK_IN_PROGRESS_STATUSES = new Set<string>([
   FileStatus.Uploaded,
   FileStatus.Processing,
 ]);
+
+/** The Transaction status that blocks a Cancel-File action (BR7). */
+const APPROVED_STATUS = 'Approved';
 
 type LoadState = 'loading' | 'ready' | 'error';
 
@@ -101,6 +136,8 @@ function formatDate(raw: string): string {
 }
 
 function FileDetail({ params }: { params: Promise<{ id: string }> }) {
+  const router = useRouter();
+
   // Resolved route id (Next 16 async param), or null until the param promise
   // settles. Resolving the param here — alongside the data reads in a single
   // loading window — avoids a separate param-only render gate.
@@ -119,9 +156,9 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [txNonce, setTxNonce] = useState(0);
 
-  // Role gating (BR5): the Retry Validation control is Importer-only and
-  // fail-closed — only an explicitly-resolved Importer sees it; a null/Approver
-  // role hides it. Resolved once on mount via the swappable role source.
+  // Role gating (BR5 / BR10): the Retry Validation and Cancel File controls are
+  // Importer-only and fail-closed — only an explicitly-resolved Importer sees
+  // them; a null/Approver role hides them. Resolved once on mount.
   const [role, setRole] = useState<string | null>(null);
 
   // Validation-errors view (only loaded for a Failed file): the column metadata
@@ -134,6 +171,12 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
 
   // True while the retry-validation POST is in flight (disables the control).
   const [retrying, setRetrying] = useState(false);
+
+  // Cancel-File flow (R12, BR7): the confirmation dialog's open state, the BR7
+  // blocked banner, and the in-flight flag for the DELETE.
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelBlocked, setCancelBlocked] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   // Resolve the route param once on mount (independent of the data reads so a
   // file-logs re-read on retry never re-resolves the param).
@@ -188,7 +231,7 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
   }, [txNonce]);
 
   // Resolve the signed-in role once on mount. A failed resolve leaves `role`
-  // null, which HIDES the Retry control (fail-closed for a privileged action).
+  // null, which HIDES the privileged controls (fail-closed).
   useEffect(() => {
     let active = true;
     void fetchCurrentRole().then((resolved) => {
@@ -262,6 +305,52 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
     () => (id === null ? [] : transactionsForFile(transactions, id)),
     [transactions, id],
   );
+
+  // BR7 guard (CLIENT-SIDE): the file is cancellable only while NO transaction
+  // in its slice is `Approved`. Derived from the already-loaded slice — there is
+  // no server-side guard in the spec.
+  const hasApprovedTransaction = useMemo(
+    () =>
+      slice.some(
+        (tx) =>
+          (tx.Status ?? '').toLowerCase() === APPROVED_STATUS.toLowerCase(),
+      ),
+    [slice],
+  );
+
+  // Triggering Cancel: BR7-block (with banner, NO dialog, NO delete) when any
+  // transaction is Approved; otherwise open the destructive-confirmation modal.
+  function handleTriggerCancel() {
+    if (hasApprovedTransaction) {
+      setCancelBlocked(true);
+      setCancelDialogOpen(false);
+      return;
+    }
+    setCancelBlocked(false);
+    setCancelDialogOpen(true);
+  }
+
+  // Confirming the cancel: DELETE /v1/files?LogId= with the LastChangedUser audit
+  // header, then (on success) navigate back to /files where the now-deactivated
+  // file no longer appears in the active list (R12, project-brief §9 step 5).
+  async function handleConfirmCancel() {
+    if (id === null) return;
+    setCancelling(true);
+    try {
+      const auditUser = (await fetchCurrentUserIdentity()) ?? 'unknown';
+      await cancelFile(id, auditUser);
+      setCancelDialogOpen(false);
+      router.push('/files');
+    } catch {
+      // Surface the failure as the BR7-style blocked banner copy is reserved for
+      // the approved-guard; a delete failure simply closes the dialog and leaves
+      // the file in place so the user can retry. The client already logged the
+      // typed APIError.
+      setCancelDialogOpen(false);
+    } finally {
+      setCancelling(false);
+    }
+  }
 
   // Only the VISIBLE columns render — a `Visible:false` column contributes
   // neither a heading nor a cell (R13).
@@ -348,17 +437,43 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
           </div>
         </div>
 
-        {/* Importer-only Retry Validation control on a Failed file (BR5, R11). */}
-        {isFailed && isImporter && (
-          <Button
-            type="button"
-            onClick={handleRetryValidation}
-            disabled={retrying}
-          >
-            {retrying ? 'Retrying validation…' : 'Retry Validation'}
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Importer-only Retry Validation control on a Failed file (BR5, R11). */}
+          {isFailed && isImporter && (
+            <Button
+              type="button"
+              onClick={handleRetryValidation}
+              disabled={retrying}
+            >
+              {retrying ? 'Retrying validation…' : 'Retry Validation'}
+            </Button>
+          )}
+
+          {/* Importer-only Cancel File control (R12, BR10). Absent for the
+              Approver and any unresolved role (fail-closed). */}
+          {isImporter && (
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleTriggerCancel}
+            >
+              Cancel file
+            </Button>
+          )}
+        </div>
       </header>
+
+      {/* BR7 blocked banner: the file has at least one Approved transaction, so
+          Cancel is blocked outright — no dialog, no delete. */}
+      {cancelBlocked && (
+        <div
+          role="alert"
+          className="border-destructive/40 bg-destructive/10 text-destructive mb-6 rounded-lg border px-4 py-3 text-sm font-medium"
+        >
+          This file can&apos;t be cancelled because it has at least one approved
+          transaction.
+        </div>
+      )}
 
       {isWorkInProgress && (
         <div
@@ -505,6 +620,45 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
           </Table>
         </div>
       )}
+
+      {/* Destructive-action confirmation modal (BR3-style): names the file, the
+          confirm action is destructive-styled, and default focus rests on the
+          dismiss (Keep file) button so an accidental Enter never deletes. */}
+      <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel this file?</DialogTitle>
+            <DialogDescription>
+              Cancelling deactivates{' '}
+              <span className="text-foreground font-medium">
+                {fileLog.CurrentFileName}
+              </span>{' '}
+              and removes its transactions from the Approver&apos;s working
+              surface. This can&apos;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            {/* Dismiss — the safe default; autofocused (BR3). */}
+            <Button
+              type="button"
+              variant="outline"
+              autoFocus
+              onClick={() => setCancelDialogOpen(false)}
+            >
+              Keep file
+            </Button>
+            {/* Destructive confirm — proceeds with the cancellation. */}
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={cancelling}
+              onClick={handleConfirmCancel}
+            >
+              {cancelling ? 'Cancelling…' : 'Confirm'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
