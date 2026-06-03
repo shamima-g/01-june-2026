@@ -71,6 +71,65 @@ export const fileUploadSchema = z.object({
 });
 
 /**
+ * Transaction-file upload validation schema (Epic 2, Story 3 — R2 / NFR2).
+ *
+ * The Upload screen ingests transaction files only: per project-brief §NFR2 an
+ * upload is scoped to a CSV file no larger than 5 MB. We validate the picked
+ * file client-side BEFORE sending its binary so an out-of-scope file (wrong type
+ * or oversized) is rejected into the inline error state rather than POSTed.
+ *
+ * Distinct from `fileUploadSchema` above (which allows image/PDF for other
+ * surfaces): a transaction file must be CSV — accepted either by MIME type
+ * (`text/csv`, plus the variants browsers and OSes emit such as
+ * `application/csv` / `application/vnd.ms-excel`) OR by a `.csv` extension, since
+ * some environments report an empty/blank `type` for a `.csv` file.
+ */
+const MAX_TRANSACTION_FILE_BYTES = 5 * 1024 * 1024; // 5 MB (NFR2)
+const CSV_MIME_TYPES = new Set([
+  'text/csv',
+  'application/csv',
+  'application/vnd.ms-excel',
+  'text/plain',
+]);
+
+export const transactionFileUploadSchema = z
+  .object({
+    name: z.string().min(1, 'File name is required'),
+    size: z
+      .number()
+      .max(
+        MAX_TRANSACTION_FILE_BYTES,
+        'File is too large. Please upload a CSV file of 5 MB or less.',
+      ),
+    type: z.string(),
+  })
+  .refine(
+    (file) =>
+      CSV_MIME_TYPES.has(file.type.toLowerCase()) ||
+      file.name.toLowerCase().endsWith('.csv'),
+    {
+      message: 'Unsupported file type. Please upload a CSV file.',
+      path: ['type'],
+    },
+  );
+
+/**
+ * Validates a picked File against {@link transactionFileUploadSchema} and returns
+ * the first user-facing rejection message, or `null` when the file is in scope.
+ * Reads the File's own `name` / `size` / `type` (size + type validation, R2 /
+ * NFR2) without reading its contents.
+ */
+export function validateTransactionFile(file: File): string | null {
+  const result = transactionFileUploadSchema.safeParse({
+    name: file.name,
+    size: file.size,
+    type: file.type,
+  });
+  if (result.success) return null;
+  return result.error.issues[0]?.message ?? 'The selected file is not valid.';
+}
+
+/**
  * Pagination schema
  */
 export const paginationSchema = z.object({

@@ -231,3 +231,79 @@ export const createMockTransactionsForFile = (
 export const createTransactionEnvelope = (
   items: MockTransaction[] = [createMockTransaction()],
 ): { Transactions: MockTransaction[] } => ({ Transactions: items });
+
+/* -------------------------------------------------------------------------- */
+/* File Settings (Epic 2, Story 3 — upload's File Setting selector)           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A single FileSetting record in observed PascalCase shape, matching
+ * `documentation/transactions-api.yaml` → `components.schemas.FileSettingRead`
+ * (the `FileSettingGetList` operation on `GET /v1/file-settings`). No
+ * api-shape-report.md exists for this build, so the spec schema is authoritative.
+ *
+ * Shape notes the upload surface honours:
+ *   - The list arrives under the PLURAL-keyed `{ FileSettings: [...] }` envelope
+ *     (spec `FileSettingReadList.FileSettings`), which the API client unwraps to
+ *     a bare `MockFileSetting[]` before the page sees it — so a page-level mock
+ *     of `get()` should resolve the UNWRAPPED array.
+ *   - On confirm the upload sends the picked record's `Id` as the `FileSettingId`
+ *     query param and its `Name` as `FileSettingName` (project-brief §9 File
+ *     Upload, R2). The selector therefore binds those two fields; the rest mirror
+ *     the spec for completeness.
+ *
+ * Only the fields the upload screen consumes are kept narrow; the spec carries
+ * more (`StagingSchema`, `TargetTable`, audit fields, etc.) but they don't shape
+ * the selector or the upload request, so modelling them would be noise.
+ */
+export interface MockFileSetting {
+  Id: number;
+  Name: string;
+  SourceId: number;
+  SourceName: string;
+  TypeId: number;
+  TypeName: string;
+  Direction: string;
+  IsActive: boolean;
+}
+
+/**
+ * Builds a single FileSetting record. Defaults model an active "Daily Bank
+ * Import" inbound setting; pass `overrides` to vary the `Id`/`Name` the selector
+ * surfaces and the upload sends.
+ */
+export const createMockFileSetting = (
+  overrides: Partial<MockFileSetting> = {},
+): MockFileSetting => ({
+  Id: 12,
+  Name: 'Daily Bank Import',
+  SourceId: 3,
+  SourceName: 'Bank A',
+  TypeId: 1,
+  TypeName: 'CSV',
+  Direction: 'Inbound',
+  IsActive: true,
+  ...overrides,
+});
+
+/**
+ * A spread of FileSetting options with distinct Ids and Names so the selector
+ * renders multiple choices and a test can pick an unambiguous one.
+ */
+export const createMockFileSettingList = (): MockFileSetting[] => [
+  createMockFileSetting({ Id: 12, Name: 'Daily Bank Import' }),
+  createMockFileSetting({ Id: 14, Name: 'Weekly Reconciliation' }),
+  createMockFileSetting({ Id: 21, Name: 'Ad-hoc Manual Upload' }),
+];
+
+/**
+ * The FileSetting collection as the live backend returns it: a single-key
+ * PascalCase envelope under the PLURAL `FileSettings` key (spec
+ * `FileSettingReadList.FileSettings`). The API client unwraps this to a bare
+ * `MockFileSetting[]` before the page receives it — so page-level mocks of
+ * `get()` should resolve the UNWRAPPED array, while envelope-aware client tests
+ * use this factory.
+ */
+export const createFileSettingEnvelope = (
+  items: MockFileSetting[] = [createMockFileSetting()],
+): { FileSettings: MockFileSetting[] } => ({ FileSettings: items });

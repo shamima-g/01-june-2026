@@ -164,3 +164,32 @@ export interface Transaction {
   LastChangedUser: string;
   LastChangedDate: string;
 }
+
+/**
+ * FileSetting — a file-import configuration as the live transactions backend
+ * emits it, in observed PascalCase (project-brief §6, spec
+ * `components.schemas.FileSettingRead`, operation `FileSettingGetList` on
+ * `GET /v1/file-settings`).
+ *
+ * Field-shape notes the upload surface must honour:
+ *   - The collection arrives wrapped in the PLURAL `{ FileSettings: [...] }`
+ *     envelope (spec `FileSettingReadList.FileSettings`) — distinct from the
+ *     file-logs SINGULAR `{ FileLog: [...] }` oddity — which the API client
+ *     (handleSuccessResponse) unwraps to a bare `FileSetting[]` before any
+ *     caller sees it (project-brief §6 / §13.C).
+ *   - At upload time the picked record's `Id` is sent as the `FileSettingId`
+ *     query param and its `Name` as `FileSettingName` (project-brief §9 File
+ *     Upload, R2). The spec carries more fields (`StagingTable`,
+ *     `ProcessDefinitionId`, audit fields); only the ones the selector and the
+ *     upload request consume are modelled here.
+ */
+export interface FileSetting {
+  Id: number;
+  Name: string;
+  SourceId: number;
+  SourceName: string;
+  TypeId: number;
+  TypeName: string;
+  Direction: string;
+  IsActive: boolean;
+}

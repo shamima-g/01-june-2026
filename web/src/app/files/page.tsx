@@ -31,6 +31,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { z } from 'zod';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowDown, ArrowUp, ArrowUpDown, Upload } from 'lucide-react';
@@ -54,6 +55,20 @@ import type { FileLog } from '@/types/api';
 /** Page-size options (project-brief R14); 20 is the default. */
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50] as const;
 const DEFAULT_PAGE_SIZE = 20;
+/**
+ * The page-size value is user-supplied (a <select> change). Rather than trust
+ * the incoming number, we validate it against the PAGE_SIZE_OPTIONS allow-list
+ * with a Zod enum and fall back to the default when it is not a member (R14).
+ */
+type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+const pageSizeSchema = z.coerce
+  .number()
+  .refine(
+    (value): value is PageSize =>
+      (PAGE_SIZE_OPTIONS as readonly number[]).includes(value),
+    { message: 'Unsupported page size' },
+  )
+  .catch(DEFAULT_PAGE_SIZE as PageSize);
 
 type LoadState = 'loading' | 'ready' | 'error';
 type SortColumn = 'fileName' | 'processDate' | 'recordCount' | 'fileStatus';
@@ -193,7 +208,10 @@ function FileLogsDashboard() {
   }
 
   function handlePageSizeChange(next: number) {
-    setPageSize(next);
+    // Validate the selected value against the allow-list before trusting it;
+    // an out-of-list value parses back to the default (R14).
+    const validatedSize = pageSizeSchema.parse(next);
+    setPageSize(validatedSize);
     setPageIndex(0);
   }
 
