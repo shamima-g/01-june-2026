@@ -2,7 +2,9 @@
  * Shared mock-data factories for Epic 2 (File Import & Lifecycle).
  *
  * Created by Epic 2 Story 1's test-generator. Subsequent Epic 2 stories import
- * and EXTEND this file — never duplicate shapes per test file.
+ * and EXTEND this file — never duplicate shapes per test file. Epic 3 (the
+ * full Transactions table) reuses the same PascalCase transaction shape and
+ * extends it with table-level list/page factories (see the Epic 3 section).
  *
  * Shape source of truth (in priority order):
  *   1. `generated-docs/context/api-shape-report.md` — NOT present for this build,
@@ -218,6 +220,78 @@ export const createMockTransactionsForFile = (
       Reference: `TXN-${n}`,
       AccountNumber: `100000000${i}`,
       Amount: (i + 1) * 100,
+    });
+  });
+
+/* -------------------------------------------------------------------------- */
+/* Transactions table (Epic 3, Story 1 — R4 read-only sortable/paginated grid) */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A spread of transactions spanning the whole TransactionStatus enum
+ * (`Imported` / `Approved` / `Rejected`, project-brief §6 / §13.B) for the
+ * full read-only Transactions table (R4). Distinct References, Account Numbers
+ * and Amounts so a single-column sort produces an unambiguous ordering and
+ * `within(row)` lookups never collide. Ordering is deliberately NOT pre-sorted
+ * by any column — the page's sort logic is the thing under test.
+ *
+ * `TransactionType` carries the spec-schema word values (`Debit` / `Credit`);
+ * §13-D records an UNRESOLVED format discrepancy (the BRD sample data uses the
+ * single-character codes `D` / `C`). Tests therefore do NOT assert on the
+ * TransactionType display FORMAT — the value is passed through here so the page
+ * renders whatever the live API returns.
+ */
+export const createMockTransactionList = (): MockTransaction[] => [
+  createMockTransaction({
+    Id: 9101,
+    Reference: 'TXN-CHARLIE',
+    AccountNumber: '3000000003',
+    TransactionDate: '2026-04-10T06:00:00Z',
+    Description: 'Charlie supplier payment',
+    Amount: 300.0,
+    Currency: 'ZAR',
+    TransactionType: 'Debit',
+    Status: 'Imported',
+  }),
+  createMockTransaction({
+    Id: 9102,
+    Reference: 'TXN-ALPHA',
+    AccountNumber: '1000000001',
+    TransactionDate: '2026-04-12T09:15:00Z',
+    Description: 'Alpha refund',
+    Amount: 50.0,
+    Currency: 'USD',
+    TransactionType: 'Credit',
+    Status: 'Approved',
+  }),
+  createMockTransaction({
+    Id: 9103,
+    Reference: 'TXN-BRAVO',
+    AccountNumber: '2000000002',
+    TransactionDate: '2026-04-11T14:45:00Z',
+    Description: 'Bravo chargeback',
+    Amount: 128.0,
+    Currency: 'ZAR',
+    TransactionType: 'Debit',
+    Status: 'Rejected',
+  }),
+];
+
+/**
+ * Generates `count` distinct transaction rows for pagination / page-size
+ * assertions on the Transactions table. References and Ids are unique and
+ * zero-padded so a Reference sort is deterministic and `within(row)` lookups
+ * never collide.
+ */
+export const createMockTransactionPage = (count: number): MockTransaction[] =>
+  Array.from({ length: count }, (_, i) => {
+    const n = String(i + 1).padStart(3, '0');
+    return createMockTransaction({
+      Id: 9500 + i,
+      Reference: `TXN-${n}`,
+      AccountNumber: `9${String(i).padStart(9, '0')}`,
+      Amount: (i + 1) * 25,
+      TransactionDate: `2026-05-${String((i % 28) + 1).padStart(2, '0')}T00:00:00Z`,
     });
   });
 
