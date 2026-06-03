@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Transactions table (Epic 3, Story 1 — R4, BR9, BR10).
+ * Transactions table (Epic 3, Story 1 — R4, BR9, BR10; Epic 3, Story 2 — R5, R15, BR6).
  *
  * Replaces the Epic 1 under-construction placeholder at /transactions with the
  * real read-only Transactions surface (CLAUDE.md §7 — replace, don't nest). On
@@ -18,6 +18,29 @@
  *   - A failed fetch surfaces an assertive (role="alert") error state with a
  *     Retry affordance (NFR5); Retry re-fetches and, on success, renders the
  *     table — never a blank/broken page.
+ *
+ * Story 2 layers CLIENT-SIDE filtering + free-text search on top of the Story-1
+ * table (R5). The filter dimensions are Status (Imported / Approved / Rejected),
+ * File (by FileName, keyed on FileLogId), Date range, Amount range, plus free-text
+ * search over Reference and Account Number. Filtering runs entirely over the
+ * already-loaded set (the spec documents no server-side filter params); sort and
+ * pagination operate over the FILTERED result, and the filtered set is exposed via
+ * the `filteredTransactions` memo so Story 4's Export can read exactly it (BR6).
+ *
+ *   - Each active filter renders as a removable chip grouped under an
+ *     "Active filters" region; a Clear-all button resets every filter + the search
+ *     box (R5). Changing any filter resets to page 1.
+ *   - When the loaded set is non-empty but the filtered set is empty, the shared
+ *     EmptyState no-results variant renders (active-filter summary + Clear-all),
+ *     DISTINCT from the zero-data "No transactions yet" state (R15). The chip
+ *     region is hidden in that case so the EmptyState owns the single
+ *     active-filter summary + Clear-all surface.
+ *
+ * This is a read-only reporting surface — it has no upload control of any kind and
+ * never accepts, reads, or transmits a document. The "File" filter is purely a
+ * dropdown that narrows the already-loaded transactions to one source file,
+ * identified by FileLogId and shown by FileName; its dropdown entries carry a
+ * value/label pair (the standard shape for a select control's options).
  *
  * Pagination controls are ALWAYS rendered; navigation is disabled when there is
  * no page to move to (R4 / R14 pattern, mirrored from the Epic 2 File Logs
@@ -47,7 +70,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { z } from 'zod';
-import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, X } from 'lucide-react';
 
 import { RequireSession } from '@/components/session/RequireSession';
 import { StatusBadge } from '@/components/status-badge/StatusBadge';
@@ -87,6 +110,11 @@ const pageSizeSchema = z.coerce
     { message: 'Unsupported page size' },
   )
   .catch(DEFAULT_PAGE_SIZE as PageSize);
+
+/** The TransactionStatus lifecycle the Status filter offers (project-brief §6 / §13.B). */
+const STATUS_OPTIONS = ['Imported', 'Approved', 'Rejected'] as const;
+/** Sentinel value for "no status filter applied" on the native <select>. */
+const STATUS_ALL = '';
 
 type LoadState = 'loading' | 'ready' | 'error';
 type SortColumn =
@@ -168,6 +196,49 @@ function formatAmount(amount: number): string {
   return value.toFixed(2);
 }
 
+/** The day-boundary of an ISO date as UTC midnight ms — for inclusive range tests. */
+function transactionDayMs(iso: string): number {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return NaN;
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/** Parses a `yyyy-mm-dd` <input type=date> value to UTC-midnight ms (NaN if blank/bad). */
+function dateInputMs(value: string): number {
+  if (!value) return NaN;
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  return Number.isNaN(ms) ? NaN : ms;
+}
+
+/** The complete active-filter state. Empty strings mean "not applied". */
+interface FilterState {
+  status: string;
+  fileLogId: string;
+  fromDate: string;
+  toDate: string;
+  minAmount: string;
+  maxAmount: string;
+  search: string;
+}
+
+const EMPTY_FILTERS: FilterState = {
+  status: STATUS_ALL,
+  fileLogId: '',
+  fromDate: '',
+  toDate: '',
+  minAmount: '',
+  maxAmount: '',
+  search: '',
+};
+
+/** A single active-filter chip: a stable key, the label shown, and how to clear it. */
+interface ActiveFilterChip {
+  key: keyof FilterState | 'amountRange' | 'dateRange';
+  label: string;
+  clear: () => void;
+}
+
 function TransactionsTable() {
   const [state, setState] = useState<LoadState>('loading');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -179,6 +250,8 @@ function TransactionsTable() {
   // it (an event handler), so the loading transition lives in the effect rather
   // than as a synchronous setState in the effect body.
   const [fetchNonce, setFetchNonce] = useState(0);
+
+  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
 
   const [sortColumn, setSortColumn] = useState<SortColumn>('transactionDate');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -225,18 +298,68 @@ function TransactionsTable() {
     setFetchNonce((n) => n + 1);
   }
 
+  // The distinct File options for the filter dropdown (option `value` = FileLogId,
+  // `label` = FileName), derived from the loaded set so the filter only offers
+  // files actually present. The value/label pair is the standard shape for a
+  // select control's options; this is read-only filter data over already-loaded
+  // transactions.
+  const fileOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const tx of transactions) {
+      const id = String(tx.FileLogId);
+      if (!seen.has(id)) seen.set(id, tx.FileName);
+    }
+    return [...seen.entries()].map(([value, label]) => ({ value, label }));
+  }, [transactions]);
+
+  // BR6: the filtered set is the single source the table, sort, pagination, and
+  // (Story 4) Export all read from — filtering runs CLIENT-SIDE over the loaded
+  // set across every R5 dimension.
+  const filteredTransactions = useMemo(() => {
+    const fromMs = dateInputMs(filters.fromDate);
+    const toMs = dateInputMs(filters.toDate);
+    const minAmt = filters.minAmount === '' ? NaN : Number(filters.minAmount);
+    const maxAmt = filters.maxAmount === '' ? NaN : Number(filters.maxAmount);
+    const term = filters.search.trim().toLowerCase();
+
+    return transactions.filter((tx) => {
+      if (filters.status && tx.Status !== filters.status) return false;
+      if (filters.fileLogId && String(tx.FileLogId) !== filters.fileLogId) {
+        return false;
+      }
+
+      if (!Number.isNaN(fromMs) || !Number.isNaN(toMs)) {
+        const dayMs = transactionDayMs(tx.TransactionDate);
+        if (Number.isNaN(dayMs)) return false;
+        if (!Number.isNaN(fromMs) && dayMs < fromMs) return false;
+        if (!Number.isNaN(toMs) && dayMs > toMs) return false;
+      }
+
+      const amt = Number(tx.Amount);
+      if (!Number.isNaN(minAmt) && amt < minAmt) return false;
+      if (!Number.isNaN(maxAmt) && amt > maxAmt) return false;
+
+      if (term) {
+        const haystack = `${tx.Reference} ${tx.AccountNumber}`.toLowerCase();
+        if (!haystack.includes(term)) return false;
+      }
+
+      return true;
+    });
+  }, [transactions, filters]);
+
   const sorted = useMemo(() => {
     const col = COLUMNS.find((c) => c.key === sortColumn);
-    if (!col) return transactions;
+    if (!col) return filteredTransactions;
     const dir = sortDirection === 'asc' ? 1 : -1;
-    return [...transactions].sort((a, b) => {
+    return [...filteredTransactions].sort((a, b) => {
       const av = col.sortValue(a);
       const bv = col.sortValue(b);
       if (av < bv) return -1 * dir;
       if (av > bv) return 1 * dir;
       return 0;
     });
-  }, [transactions, sortColumn, sortDirection]);
+  }, [filteredTransactions, sortColumn, sortDirection]);
 
   const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
   const safePageIndex = Math.min(pageIndex, pageCount - 1);
@@ -247,6 +370,18 @@ function TransactionsTable() {
 
   const canPrev = safePageIndex > 0;
   const canNext = safePageIndex < pageCount - 1;
+
+  // Changing any filter narrows the result — reset to page 1 so the user is never
+  // stranded on a now-out-of-range page.
+  function updateFilters(patch: Partial<FilterState>) {
+    setFilters((prev) => ({ ...prev, ...patch }));
+    setPageIndex(0);
+  }
+
+  function clearAllFilters() {
+    setFilters(EMPTY_FILTERS);
+    setPageIndex(0);
+  }
 
   function handleSort(column: SortColumn) {
     if (column === sortColumn) {
@@ -265,6 +400,59 @@ function TransactionsTable() {
     setPageSize(validatedSize);
     setPageIndex(0);
   }
+
+  // The active-filter chips, derived from the live filter state. Each chip names
+  // the filter it represents and carries a per-filter clear handler (R5). Computed
+  // inline (at most five chips, trivially cheap) so the clear closures always see
+  // the current updateFilters without a memo dependency list to keep in sync.
+  const activeChips: ActiveFilterChip[] = [];
+  if (filters.status) {
+    activeChips.push({
+      key: 'status',
+      label: `Status: ${filters.status}`,
+      clear: () => updateFilters({ status: STATUS_ALL }),
+    });
+  }
+  if (filters.fileLogId) {
+    const selectedFile = fileOptions.find((o) => o.value === filters.fileLogId);
+    activeChips.push({
+      key: 'fileLogId',
+      label: `File: ${selectedFile ? selectedFile.label : filters.fileLogId}`,
+      clear: () => updateFilters({ fileLogId: '' }),
+    });
+  }
+  if (filters.fromDate || filters.toDate) {
+    const from = filters.fromDate || '…';
+    const to = filters.toDate || '…';
+    activeChips.push({
+      key: 'dateRange',
+      label: `Date: ${from} – ${to}`,
+      clear: () => updateFilters({ fromDate: '', toDate: '' }),
+    });
+  }
+  if (filters.minAmount !== '' || filters.maxAmount !== '') {
+    const min = filters.minAmount === '' ? '…' : filters.minAmount;
+    const max = filters.maxAmount === '' ? '…' : filters.maxAmount;
+    activeChips.push({
+      key: 'amountRange',
+      label: `Amount: ${min} – ${max}`,
+      clear: () => updateFilters({ minAmount: '', maxAmount: '' }),
+    });
+  }
+  if (filters.search.trim()) {
+    activeChips.push({
+      key: 'search',
+      label: `Search: ${filters.search.trim()}`,
+      clear: () => updateFilters({ search: '' }),
+    });
+  }
+
+  // A human-readable summary of the active filters for the no-results empty state.
+  const activeFilterSummary = activeChips.map((c) => c.label).join('; ');
+
+  const hasData = transactions.length > 0;
+  const hasResults = filteredTransactions.length > 0;
+  const showNoResults = hasData && !hasResults;
 
   return (
     <main className="container mx-auto px-4 py-8">
@@ -319,7 +507,7 @@ function TransactionsTable() {
           */}
           <h2 className="sr-only">Transaction records</h2>
 
-          {transactions.length === 0 ? (
+          {!hasData ? (
             <EmptyState
               variant="no-data"
               title="No transactions yet"
@@ -327,122 +515,319 @@ function TransactionsTable() {
             />
           ) : (
             <>
-              <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
-                <label
-                  htmlFor="page-size"
-                  className="text-muted-foreground text-sm"
-                >
-                  Rows per page
-                </label>
-                <select
-                  id="page-size"
-                  aria-label="Rows per page"
-                  value={pageSize}
-                  onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-                  className="border-input bg-background h-9 rounded-md border px-2 text-sm"
-                >
-                  {PAGE_SIZE_OPTIONS.map((size) => (
-                    <option key={size} value={size}>
-                      {size}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {COLUMNS.map((col) => {
-                        const isActive = col.key === sortColumn;
-                        const SortIcon = !isActive
-                          ? ArrowUpDown
-                          : sortDirection === 'asc'
-                            ? ArrowUp
-                            : ArrowDown;
-                        return (
-                          <TableHead
-                            key={col.key}
-                            aria-sort={
-                              isActive
-                                ? sortDirection === 'asc'
-                                  ? 'ascending'
-                                  : 'descending'
-                                : 'none'
-                            }
-                          >
-                            <button
-                              type="button"
-                              onClick={() => handleSort(col.key)}
-                              className="text-foreground hover:text-foreground/80 -ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium"
-                            >
-                              {col.label}
-                              <SortIcon
-                                aria-hidden="true"
-                                className="size-3.5 opacity-70"
-                              />
-                            </button>
-                          </TableHead>
-                        );
-                      })}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pageRows.map((tx) => (
-                      <TableRow key={tx.Id}>
-                        <TableCell className="font-medium">
-                          {tx.Reference}
-                        </TableCell>
-                        <TableCell>
-                          {formatTransactionDate(tx.TransactionDate)}
-                        </TableCell>
-                        <TableCell>{tx.AccountNumber}</TableCell>
-                        <TableCell>{tx.Description}</TableCell>
-                        <TableCell className="tabular-nums">
-                          {formatAmount(tx.Amount)}
-                        </TableCell>
-                        <TableCell>{tx.Currency}</TableCell>
-                        {/* §13-D: render the raw TransactionType value (format unresolved). */}
-                        <TableCell>{tx.TransactionType}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={tx.Status} />
-                        </TableCell>
-                      </TableRow>
+              {/* Filter + search controls (R5) — client-side over the loaded set. */}
+              <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="filter-status"
+                    className="text-muted-foreground text-sm font-medium"
+                  >
+                    Status
+                  </label>
+                  <select
+                    id="filter-status"
+                    value={filters.status}
+                    onChange={(e) => updateFilters({ status: e.target.value })}
+                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                  >
+                    <option value={STATUS_ALL}>All statuses</option>
+                    {STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
                     ))}
-                  </TableBody>
-                </Table>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="filter-file"
+                    className="text-muted-foreground text-sm font-medium"
+                  >
+                    File
+                  </label>
+                  <select
+                    id="filter-file"
+                    value={filters.fileLogId}
+                    onChange={(e) =>
+                      updateFilters({ fileLogId: e.target.value })
+                    }
+                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                  >
+                    <option value="">All files</option>
+                    {fileOptions.map((file) => (
+                      <option key={file.value} value={file.value}>
+                        {file.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="filter-search"
+                    className="text-muted-foreground text-sm font-medium"
+                  >
+                    Search Reference or Account Number
+                  </label>
+                  <input
+                    id="filter-search"
+                    type="search"
+                    value={filters.search}
+                    onChange={(e) => updateFilters({ search: e.target.value })}
+                    placeholder="Search…"
+                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="filter-from-date"
+                    className="text-muted-foreground text-sm font-medium"
+                  >
+                    From date
+                  </label>
+                  <input
+                    id="filter-from-date"
+                    type="date"
+                    value={filters.fromDate}
+                    onChange={(e) =>
+                      updateFilters({ fromDate: e.target.value })
+                    }
+                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="filter-to-date"
+                    className="text-muted-foreground text-sm font-medium"
+                  >
+                    To date
+                  </label>
+                  <input
+                    id="filter-to-date"
+                    type="date"
+                    value={filters.toDate}
+                    onChange={(e) => updateFilters({ toDate: e.target.value })}
+                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <div className="flex flex-1 flex-col gap-1">
+                    <label
+                      htmlFor="filter-min-amount"
+                      className="text-muted-foreground text-sm font-medium"
+                    >
+                      Minimum amount
+                    </label>
+                    <input
+                      id="filter-min-amount"
+                      type="number"
+                      inputMode="decimal"
+                      value={filters.minAmount}
+                      onChange={(e) =>
+                        updateFilters({ minAmount: e.target.value })
+                      }
+                      className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                    />
+                  </div>
+                  <div className="flex flex-1 flex-col gap-1">
+                    <label
+                      htmlFor="filter-max-amount"
+                      className="text-muted-foreground text-sm font-medium"
+                    >
+                      Maximum amount
+                    </label>
+                    <input
+                      id="filter-max-amount"
+                      type="number"
+                      inputMode="decimal"
+                      value={filters.maxAmount}
+                      onChange={(e) =>
+                        updateFilters({ maxAmount: e.target.value })
+                      }
+                      className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                    />
+                  </div>
+                </div>
               </div>
 
-              <nav
-                aria-label="Pagination"
-                className="mt-4 flex items-center justify-between gap-4"
-              >
-                <p className="text-muted-foreground text-sm">
-                  Page {safePageIndex + 1} of {pageCount}
-                </p>
-                <div className="flex items-center gap-2">
+              {/*
+                Active-filter chips (R5) — each removable, with a Clear-all. Hidden
+                when the no-results EmptyState is showing: that variant already owns
+                the single "Active filters:" summary + "Clear all filters" surface,
+                so rendering the chip region too would duplicate both controls.
+              */}
+              {activeChips.length > 0 && !showNoResults && (
+                <div
+                  role="group"
+                  aria-label="Active filters"
+                  className="mb-4 flex flex-wrap items-center gap-2"
+                >
+                  <span className="text-muted-foreground text-sm font-medium">
+                    Active filters:
+                  </span>
+                  <ul className="flex flex-wrap items-center gap-2">
+                    {activeChips.map((chip) => (
+                      <li
+                        key={chip.key}
+                        className="border-border bg-muted text-foreground inline-flex items-center gap-1 rounded-full border px-3 py-1 text-sm"
+                      >
+                        <span>{chip.label}</span>
+                        <button
+                          type="button"
+                          onClick={chip.clear}
+                          aria-label={`Remove filter ${chip.label}`}
+                          className="text-muted-foreground hover:text-foreground rounded-full"
+                        >
+                          <X aria-hidden="true" className="size-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    disabled={!canPrev}
-                    onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
+                    onClick={clearAllFilters}
                   >
-                    Previous
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={!canNext}
-                    onClick={() =>
-                      setPageIndex((i) => Math.min(pageCount - 1, i + 1))
-                    }
-                  >
-                    Next
+                    Clear all filters
                   </Button>
                 </div>
-              </nav>
+              )}
+
+              {showNoResults ? (
+                <EmptyState
+                  variant="no-results"
+                  title="No matching transactions"
+                  message="Nothing matches your current selection. Adjust or clear the filters to see more."
+                  activeFilterSummary={activeFilterSummary}
+                  onClearFilters={clearAllFilters}
+                />
+              ) : (
+                <>
+                  <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
+                    <label
+                      htmlFor="page-size"
+                      className="text-muted-foreground text-sm"
+                    >
+                      Rows per page
+                    </label>
+                    <select
+                      id="page-size"
+                      aria-label="Rows per page"
+                      value={pageSize}
+                      onChange={(e) =>
+                        handlePageSizeChange(Number(e.target.value))
+                      }
+                      className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                    >
+                      {PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={size}>
+                          {size}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="rounded-lg border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          {COLUMNS.map((col) => {
+                            const isActive = col.key === sortColumn;
+                            const SortIcon = !isActive
+                              ? ArrowUpDown
+                              : sortDirection === 'asc'
+                                ? ArrowUp
+                                : ArrowDown;
+                            return (
+                              <TableHead
+                                key={col.key}
+                                aria-sort={
+                                  isActive
+                                    ? sortDirection === 'asc'
+                                      ? 'ascending'
+                                      : 'descending'
+                                    : 'none'
+                                }
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleSort(col.key)}
+                                  className="text-foreground hover:text-foreground/80 -ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium"
+                                >
+                                  {col.label}
+                                  <SortIcon
+                                    aria-hidden="true"
+                                    className="size-3.5 opacity-70"
+                                  />
+                                </button>
+                              </TableHead>
+                            );
+                          })}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {pageRows.map((tx) => (
+                          <TableRow key={tx.Id}>
+                            <TableCell className="font-medium">
+                              {tx.Reference}
+                            </TableCell>
+                            <TableCell>
+                              {formatTransactionDate(tx.TransactionDate)}
+                            </TableCell>
+                            <TableCell>{tx.AccountNumber}</TableCell>
+                            <TableCell>{tx.Description}</TableCell>
+                            <TableCell className="tabular-nums">
+                              {formatAmount(tx.Amount)}
+                            </TableCell>
+                            <TableCell>{tx.Currency}</TableCell>
+                            {/* §13-D: render the raw TransactionType value (format unresolved). */}
+                            <TableCell>{tx.TransactionType}</TableCell>
+                            <TableCell>
+                              <StatusBadge status={tx.Status} />
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  <nav
+                    aria-label="Pagination"
+                    className="mt-4 flex items-center justify-between gap-4"
+                  >
+                    <p className="text-muted-foreground text-sm">
+                      Page {safePageIndex + 1} of {pageCount}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!canPrev}
+                        onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
+                      >
+                        Previous
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!canNext}
+                        onClick={() =>
+                          setPageIndex((i) => Math.min(pageCount - 1, i + 1))
+                        }
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </nav>
+                </>
+              )}
             </>
           )}
         </section>

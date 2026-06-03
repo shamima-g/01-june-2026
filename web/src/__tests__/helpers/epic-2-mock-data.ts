@@ -295,6 +295,73 @@ export const createMockTransactionPage = (count: number): MockTransaction[] =>
     });
   });
 
+/* -------------------------------------------------------------------------- */
+/* Transactions filter/search (Epic 3, Story 2 — R5, R15, BR6)                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A purpose-built spread of transactions for the client-side filter + search
+ * surface (R5). Every filter DIMENSION is made discriminating so a test can
+ * prove a narrowing AND its contrast (rows inside the criteria remain, rows
+ * outside disappear) rather than passing vacuously on a list that all matches:
+ *
+ *   - FileLogId          — spans 5001 / 5002 / 5003 (File filter).
+ *   - TransactionDate    — Jan / Mar / Jun 2026 (Date-range filter), well apart
+ *                          so a mid-window range cleanly includes/excludes.
+ *   - Amount             — 25 / 500 / 9000 (Amount-range filter), orders of
+ *                          magnitude apart so a mid-band range isolates one row.
+ *   - Status             — Imported / Approved / Rejected (Status filter; the
+ *                          full TransactionStatus enum, project-brief §6 / §13.B).
+ *   - Reference          — distinct, searchable substrings (free-text search).
+ *   - AccountNumber      — distinct, searchable substrings (free-text search).
+ *
+ * References / Account Numbers are unique so `within(row)` lookups never collide.
+ * Ordering is deliberately NOT pre-sorted by any column. This factory is the
+ * single source for the filter fixtures — tests pick rows by their distinctive
+ * Reference and assert the others vanish.
+ */
+export const createMockFilterableTransactions = (): MockTransaction[] => [
+  createMockTransaction({
+    Id: 9201,
+    FileLogId: 5001,
+    FileName: 'january_2026-01.csv',
+    Reference: 'TXN-JAN-SMALL',
+    AccountNumber: 'ACC-1111111111',
+    TransactionDate: '2026-01-15T08:00:00Z',
+    Description: 'January small debit',
+    Amount: 25.0,
+    Currency: 'ZAR',
+    TransactionType: 'Debit',
+    Status: 'Imported',
+  }),
+  createMockTransaction({
+    Id: 9202,
+    FileLogId: 5002,
+    FileName: 'march_2026-03.csv',
+    Reference: 'TXN-MAR-MID',
+    AccountNumber: 'ACC-2222222222',
+    TransactionDate: '2026-03-20T08:00:00Z',
+    Description: 'March mid-band credit',
+    Amount: 500.0,
+    Currency: 'USD',
+    TransactionType: 'Credit',
+    Status: 'Approved',
+  }),
+  createMockTransaction({
+    Id: 9203,
+    FileLogId: 5003,
+    FileName: 'june_2026-06.csv',
+    Reference: 'TXN-JUN-LARGE',
+    AccountNumber: 'ACC-3333333333',
+    TransactionDate: '2026-06-01T08:00:00Z',
+    Description: 'June large debit',
+    Amount: 9000.0,
+    Currency: 'ZAR',
+    TransactionType: 'Debit',
+    Status: 'Rejected',
+  }),
+];
+
 /**
  * The Transaction collection as the live backend returns it: a single-key
  * PascalCase envelope under the SINGULAR `Transactions` key. The API client
