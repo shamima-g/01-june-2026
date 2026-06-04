@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * File Logs dashboard (Epic 2, Story 1 — R3, R6, R14, BR12).
+ * File Logs dashboard (Epic 2, Story 1 — R3, R6, R14, BR12; Epic 4, Story 3 —
+ * NFR3).
  *
  * Replaces the Epic 1 placeholder with the live File Logs surface. On mount it
  * fetches the active file logs (`GET /api/transactions/v1/file-logs?IsActive=Yes`,
@@ -25,6 +26,17 @@
  * dataset is smaller than the current page size (R14). Sort toggles ascending →
  * descending on repeated header clicks (single-column).
  *
+ * Epic 4 Story 3 — RESPONSIVE table-to-card collapse (NFR3): below 768px the
+ * multi-column table collapses to a vertical CARD list (one card per file with
+ * the File Name as primary identifier + Process Date / Record Count + the File
+ * Status badge); at/above 768px the full table renders as before. The collapse is
+ * driven by a JS media-query hook (`useMediaQuery`) — the page renders EITHER the
+ * <table> OR the card list, never both — so no wide table forces a horizontal
+ * scroll on mobile. Both layouts read the SAME sorted/paged set, both keep the
+ * row click-through to `/files/<id>`, and the sort + pagination controls drive
+ * both (the card layout carries a compact sort-control row in place of the
+ * <thead> sort headers).
+ *
  * Wrapped in RequireSession (Epic 1, Story 3) so a signed-out user is bounced to
  * `/login`; the authoritative gate remains the HttpOnly session cookie (the
  * backend 401s data reads without it).
@@ -40,6 +52,8 @@ import { RequireSession } from '@/components/session/RequireSession';
 import { StatusBadge } from '@/components/status-badge/StatusBadge';
 import { EmptyState } from '@/components/empty-state/EmptyState';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { useMediaQuery, MOBILE_QUERY } from '@/hooks/useMediaQuery';
 import {
   Table,
   TableBody,
@@ -116,8 +130,110 @@ function formatProcessDate(iso: string): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+/**
+ * The shared sort affordance for the card layout (Epic 4 Story 3 — NFR3). The
+ * card list has no <thead> to host the per-column sort buttons, so this compact
+ * control row carries the same per-column sort buttons above the cards — keeping
+ * sorting usable on mobile. Each button folds a visually-hidden "Sort by " prefix
+ * into its accessible name ("Sort by <column>"), matching the table headers.
+ */
+function MobileSortControls({
+  sortColumn,
+  sortDirection,
+  onSort,
+}: {
+  sortColumn: SortColumn;
+  sortDirection: SortDirection;
+  onSort: (column: SortColumn) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Sort file logs"
+      className="mb-3 flex flex-wrap items-center gap-2"
+    >
+      <span className="text-muted-foreground text-sm font-medium">
+        Sort by:
+      </span>
+      {COLUMNS.map((col) => {
+        const isActive = col.key === sortColumn;
+        const SortIcon = !isActive
+          ? ArrowUpDown
+          : sortDirection === 'asc'
+            ? ArrowUp
+            : ArrowDown;
+        return (
+          <button
+            key={col.key}
+            type="button"
+            onClick={() => onSort(col.key)}
+            aria-pressed={isActive}
+            className={`border-border text-foreground hover:bg-muted focus-visible:ring-ring inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none ${
+              isActive ? 'bg-muted' : 'bg-background'
+            }`}
+          >
+            <span className="sr-only">Sort by </span> {col.label}
+            <SortIcon aria-hidden="true" className="size-3 opacity-70" />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The mobile card layout for the File Logs dashboard (Epic 4 Story 3 — NFR3).
+ *
+ * Rendered INSTEAD of the desktop <table> below 768px — never alongside it — so
+ * no wide table forces a horizontal scroll on mobile. The list is a labelled
+ * `role="list"` named "File logs" (the seam the Playwright spec binds to), with
+ * one card per file carrying the File Name (primary identifier) + Process Date /
+ * Record Count + the derived File Status badge. The whole card is a click-through
+ * to `/files/<id>` (an anchor wrapping the card content), preserving the table
+ * row's navigation.
+ */
+function FileLogCardList({ logs }: { logs: FileLog[] }) {
+  return (
+    <ul role="list" aria-label="File logs" className="flex flex-col gap-3">
+      {logs.map((log) => {
+        const status = deriveFileStatus(log);
+        return (
+          <li key={log.Id} role="listitem">
+            <Link
+              href={`/files/${log.Id}`}
+              className="focus-visible:ring-ring block rounded-xl focus-visible:ring-2 focus-visible:outline-none"
+            >
+              <Card className="gap-3 py-4 transition-colors hover:bg-muted/40">
+                <CardContent className="flex flex-col gap-3 px-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-foreground min-w-0 truncate font-medium">
+                      {log.CurrentFileName}
+                    </span>
+                    <StatusBadge status={status} />
+                  </div>
+                  <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span>{formatProcessDate(log.ProcessDate)}</span>
+                    <span className="tabular-nums">
+                      {Number(log.RecordCount) || 0} records
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function FileLogsDashboard() {
   const router = useRouter();
+
+  // Epic 4 Story 3 (NFR3): below 768px render the card layout, at/above the
+  // desktop <table>. SSR-safe (false on the server / first paint → desktop), so
+  // there's no hydration mismatch; a mobile viewport flips to cards on mount.
+  const isMobile = useMediaQuery(MOBILE_QUERY);
 
   const [state, setState] = useState<LoadState>('loading');
   const [fileLogs, setFileLogs] = useState<FileLog[]>([]);
@@ -299,77 +415,96 @@ function FileLogsDashboard() {
             </select>
           </div>
 
-          <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  {COLUMNS.map((col) => {
-                    const isActive = col.key === sortColumn;
-                    const SortIcon = !isActive
-                      ? ArrowUpDown
-                      : sortDirection === 'asc'
-                        ? ArrowUp
-                        : ArrowDown;
-                    return (
-                      <TableHead
-                        key={col.key}
-                        aria-sort={
-                          isActive
-                            ? sortDirection === 'asc'
-                              ? 'ascending'
-                              : 'descending'
-                            : 'none'
-                        }
-                      >
-                        <button
-                          type="button"
-                          onClick={() => handleSort(col.key)}
-                          className="text-foreground hover:text-foreground/80 -ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium"
+          {/*
+            Epic 4 Story 3 (NFR3): below 768px render the mobile card list,
+            at/above the multi-column desktop <table>. EXACTLY ONE of the two is in
+            the DOM at a time (driven by the JS `useMediaQuery` hook, not a CSS
+            hide/show), so no wide table forces a horizontal scroll on mobile. Both
+            read the SAME `pageRows`, both click through to `/files/<id>`, and the
+            sort + pagination controls drive both.
+          */}
+          {isMobile ? (
+            <>
+              <MobileSortControls
+                sortColumn={sortColumn}
+                sortDirection={sortDirection}
+                onSort={handleSort}
+              />
+              <FileLogCardList logs={pageRows} />
+            </>
+          ) : (
+            <div className="rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    {COLUMNS.map((col) => {
+                      const isActive = col.key === sortColumn;
+                      const SortIcon = !isActive
+                        ? ArrowUpDown
+                        : sortDirection === 'asc'
+                          ? ArrowUp
+                          : ArrowDown;
+                      return (
+                        <TableHead
+                          key={col.key}
+                          aria-sort={
+                            isActive
+                              ? sortDirection === 'asc'
+                                ? 'ascending'
+                                : 'descending'
+                              : 'none'
+                          }
                         >
-                          {col.label}
-                          <SortIcon
-                            aria-hidden="true"
-                            className="size-3.5 opacity-70"
-                          />
-                        </button>
-                      </TableHead>
+                          <button
+                            type="button"
+                            onClick={() => handleSort(col.key)}
+                            className="text-foreground hover:text-foreground/80 -ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium"
+                          >
+                            {col.label}
+                            <SortIcon
+                              aria-hidden="true"
+                              className="size-3.5 opacity-70"
+                            />
+                          </button>
+                        </TableHead>
+                      );
+                    })}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pageRows.map((log) => {
+                    const status = deriveFileStatus(log);
+                    return (
+                      <TableRow
+                        key={log.Id}
+                        className="cursor-pointer"
+                        onClick={() => {
+                          router.push(`/files/${log.Id}`);
+                        }}
+                      >
+                        <TableCell className="font-medium">
+                          <Link
+                            href={`/files/${log.Id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="hover:underline"
+                          >
+                            {log.CurrentFileName}
+                          </Link>
+                        </TableCell>
+                        <TableCell>
+                          {formatProcessDate(log.ProcessDate)}
+                        </TableCell>
+                        <TableCell>{Number(log.RecordCount) || 0}</TableCell>
+                        <TableCell>
+                          <StatusBadge status={status} />
+                        </TableCell>
+                      </TableRow>
                     );
                   })}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {pageRows.map((log) => {
-                  const status = deriveFileStatus(log);
-                  return (
-                    <TableRow
-                      key={log.Id}
-                      className="cursor-pointer"
-                      onClick={() => {
-                        router.push(`/files/${log.Id}`);
-                      }}
-                    >
-                      <TableCell className="font-medium">
-                        <Link
-                          href={`/files/${log.Id}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="hover:underline"
-                        >
-                          {log.CurrentFileName}
-                        </Link>
-                      </TableCell>
-                      <TableCell>
-                        {formatProcessDate(log.ProcessDate)}
-                      </TableCell>
-                      <TableCell>{Number(log.RecordCount) || 0}</TableCell>
-                      <TableCell>
-                        <StatusBadge status={status} />
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
+                </TableBody>
+              </Table>
+            </div>
+          )}
 
           <nav
             aria-label="Pagination"

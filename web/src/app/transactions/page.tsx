@@ -3,7 +3,8 @@
 /**
  * Transactions table (Epic 3, Story 1 — R4, BR9, BR10; Epic 3, Story 2 — R5,
  * R15, BR6; Epic 3, Story 3 — R7, R8, BR1, BR2, BR3, BR8, BR9; Epic 3, Story 4
- * — R9, BR6, BR9; Epic 3, Story 5 — R10; Epic 4, Story 2 — NFR1, NFR4).
+ * — R9, BR6, BR9; Epic 3, Story 5 — R10; Epic 4, Story 2 — NFR1, NFR4; Epic 4,
+ * Story 3 — NFR3).
  *
  * Replaces the Epic 1 under-construction placeholder at /transactions with the
  * real read-only Transactions surface (CLAUDE.md §7 — replace, don't nest). On
@@ -129,6 +130,24 @@
  *     users without a mouse. Referencing the existing headline (rather than a new
  *     help node) keeps a SINGLE on-screen copy of the explanation.
  *
+ * Epic 4 Story 3 — RESPONSIVE table-to-card collapse (NFR3) — adds, on top of the
+ * shipped Epic-3/4 surface (all behaviour preserved):
+ *   - Below 768px the multi-column desktop <table> collapses to a vertical CARD
+ *     list: each card carries the Reference (primary identifier) plus 2–3 key
+ *     fields (date / amount / status) and, for an Approver on an Imported row, a
+ *     per-card "Actions" overflow that reveals the same Approve / Reject controls.
+ *   - The collapse is driven by a JS media-query hook (`useMediaQuery`) rather
+ *     than a CSS-only Tailwind `md:` hide/show: the page renders EITHER the
+ *     <table> OR the card list — NEVER both in the DOM. So at mobile width no wide
+ *     desktop table exists to force a horizontal scroll (NFR3's "desktop tables
+ *     are not horizontally scrolled on mobile"), and the layout is observable in
+ *     jsdom (which can't see a media-query `display:none`).
+ *   - Both layouts read the SAME `filteredTransactions → sorted → pageRows`
+ *     pipeline and the SAME filter / search / sort / pagination controls drive
+ *     both. In the card layout the per-column sort affordance is a compact
+ *     "Sort by <column>" control row (the headers have no <thead> to host the sort
+ *     buttons), so sorting / filtering / pagination remain usable on mobile (AC-4).
+ *
  * This is otherwise a read-only reporting surface — it has no upload control of
  * any kind and never accepts, reads, or transmits a document. The "File" filter is
  * purely a dropdown that narrows the already-loaded transactions to one source
@@ -157,12 +176,21 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
-import { ArrowDown, ArrowUp, ArrowUpDown, Download, X } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Download,
+  MoreHorizontal,
+  X,
+} from 'lucide-react';
 
 import { RequireSession } from '@/components/session/RequireSession';
 import { StatusBadge } from '@/components/status-badge/StatusBadge';
 import { EmptyState } from '@/components/empty-state/EmptyState';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { useMediaQuery, MOBILE_QUERY } from '@/hooks/useMediaQuery';
 import {
   Dialog,
   DialogContent,
@@ -705,10 +733,201 @@ function RejectDialog({
   );
 }
 
+/**
+ * The shared sort affordance, used in BOTH layouts (Epic 4 Story 3 — NFR3).
+ *
+ * In the desktop <table> each column header hosts a sort <button>. The mobile
+ * card list has no <thead> to host them, so this compact control row carries the
+ * same per-column sort buttons above the cards — so sorting stays usable in the
+ * card layout (AC-4). Each button carries the SAME visually-hidden "Sort by "
+ * prefix as the table headers, so its accessible name reads "Sort by <column>"
+ * (Epic 4 Story 2 AC-3) and the Vitest sort assertion (which targets
+ * `getByRole('button', { name: /sort by reference/i })`) resolves to a single
+ * control regardless of the active layout.
+ */
+function MobileSortControls({
+  sortColumn,
+  sortDirection,
+  onSort,
+}: {
+  sortColumn: SortColumn;
+  sortDirection: SortDirection;
+  onSort: (column: SortColumn) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Sort transactions"
+      className="mb-3 flex flex-wrap items-center gap-2"
+    >
+      <span className="text-muted-foreground text-sm font-medium">
+        Sort by:
+      </span>
+      {COLUMNS.map((col) => {
+        const isActive = col.key === sortColumn;
+        const SortIcon = !isActive
+          ? ArrowUpDown
+          : sortDirection === 'asc'
+            ? ArrowUp
+            : ArrowDown;
+        return (
+          <button
+            key={col.key}
+            type="button"
+            onClick={() => onSort(col.key)}
+            aria-pressed={isActive}
+            className={`border-border text-foreground hover:bg-muted focus-visible:ring-ring inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none ${
+              isActive ? 'bg-muted' : 'bg-background'
+            }`}
+          >
+            <span className="sr-only">Sort by </span> {col.label}
+            <SortIcon aria-hidden="true" className="size-3 opacity-70" />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The mobile card layout for the Transactions surface (Epic 4 Story 3 — NFR3).
+ *
+ * Rendered INSTEAD of the desktop <table> below 768px — never alongside it — so
+ * no wide table forces a horizontal scroll on mobile. The list is a labelled
+ * `role="list"` named "Transactions" (the seam both the Vitest + Playwright
+ * specs bind to), with one `<Card role="listitem">` per `pageRows` row carrying:
+ *   - the Reference (primary identifier),
+ *   - 2–3 key fields (Transaction Date, Amount + Currency, Status badge), and
+ *   - for an Approver on an Imported row, a per-card "Actions" overflow button
+ *     that reveals the same Approve / Reject controls the table row offers (BR1).
+ *
+ * The cards render the SAME `pageRows` the desktop table reads, so the filter /
+ * search / sort / pagination controls (which drive `pageRows`) operate on the
+ * card list identically (AC-4). A Rejected row surfaces its read-only note trail
+ * (BR8), matching the table.
+ */
+function TransactionCardList({
+  rows,
+  isApprover,
+  expandedActionsId,
+  onToggleActions,
+  onApprove,
+  onReject,
+}: {
+  rows: Transaction[];
+  isApprover: boolean;
+  expandedActionsId: number | null;
+  onToggleActions: (txId: number) => void;
+  onApprove: (tx: Transaction) => void;
+  onReject: (tx: Transaction) => void;
+}) {
+  return (
+    <ul role="list" aria-label="Transactions" className="flex flex-col gap-3">
+      {rows.map((tx) => {
+        const isImported = tx.Status === IMPORTED_STATUS;
+        const isRejected = tx.Status === 'Rejected';
+        const canAct = isApprover && isImported;
+        const actionsOpen = expandedActionsId === tx.Id;
+        return (
+          <li key={tx.Id} role="listitem">
+            <Card className="gap-3 py-4">
+              <CardContent className="flex flex-col gap-3 px-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <span className="text-foreground truncate font-medium">
+                      {tx.Reference}
+                    </span>
+                    <span className="text-muted-foreground text-xs">
+                      {formatTransactionDate(tx.TransactionDate)}
+                    </span>
+                  </div>
+                  {/*
+                    Per-card review-action overflow (BR1 / BR9): present ONLY for
+                    an Approver on an Imported row — absent for a non-Approver and
+                    on Approved/Rejected rows (fail-closed, hidden not disabled).
+                    Toggles the inline Approve/Reject controls below.
+                  */}
+                  {canAct && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Actions for ${tx.Reference}`}
+                      aria-expanded={actionsOpen}
+                      onClick={() => onToggleActions(tx.Id)}
+                    >
+                      <MoreHorizontal aria-hidden="true" className="size-4" />
+                    </Button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-foreground text-sm tabular-nums">
+                    {formatAmount(tx.Amount)} {tx.Currency}
+                  </span>
+                  <StatusBadge status={tx.Status} />
+                </div>
+
+                <p className="text-muted-foreground text-sm">
+                  {tx.Description}
+                </p>
+
+                {/*
+                  BR8: a Rejected row surfaces its note + who rejected it and when,
+                  READ-ONLY (mirrors the table row).
+                */}
+                {isRejected && tx.UserNote && (
+                  <p className="text-muted-foreground text-xs">
+                    <span className="font-medium">Rejection note:</span>{' '}
+                    {tx.UserNote}
+                    {tx.LastChangedUser && (
+                      <>
+                        {' '}
+                        — rejected by {tx.LastChangedUser}
+                        {tx.LastChangedDate &&
+                          ` on ${formatTransactionDate(tx.LastChangedDate)}`}
+                      </>
+                    )}
+                  </p>
+                )}
+
+                {canAct && actionsOpen && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => onApprove(tx)}
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onReject(tx)}
+                    >
+                      Reject
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function TransactionsTable() {
   // Toast is a non-essential success confirmation; useOptionalToast yields null
   // when no provider is mounted (an isolated render) so the page never crashes.
   const toast = useOptionalToast();
+
+  // Epic 4 Story 3 (NFR3): below 768px render the card layout, at/above the
+  // desktop <table>. SSR-safe (false on the server / first paint → desktop), so
+  // there's no hydration mismatch; a mobile viewport flips to cards on mount.
+  const isMobile = useMediaQuery(MOBILE_QUERY);
 
   const [state, setState] = useState<LoadState>('loading');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -738,6 +957,10 @@ function TransactionsTable() {
   const [rejectTarget, setRejectTarget] = useState<Transaction | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Epic 4 Story 3: which mobile card's action overflow is open (one at a time).
+  const [expandedActionsId, setExpandedActionsId] = useState<number | null>(
+    null,
+  );
 
   // A ref to the data section so a drill-down click can reveal the now-narrowed
   // table (scroll it into view) — the summary sits above the table, so on a
@@ -802,6 +1025,11 @@ function TransactionsTable() {
     setRejectTarget(tx);
   }
 
+  // Toggle a mobile card's action overflow (collapsing any other open one).
+  function toggleCardActions(txId: number) {
+    setExpandedActionsId((current) => (current === txId ? null : txId));
+  }
+
   // Optimistically flip the targeted row's Status (and, for a reject, its note +
   // audit trail) in place so the table reflects the new state immediately (R7 /
   // R8 / BR8). The mutation has already succeeded when this runs.
@@ -826,6 +1054,7 @@ function TransactionsTable() {
       await approveTransaction(tx.Id, auditUser);
       applyOptimisticFlip(tx.Id, { Status: 'Approved' });
       setApproveTarget(null);
+      setExpandedActionsId(null);
       toast?.showToast({
         variant: 'success',
         title: `Transaction ${tx.Reference} approved`,
@@ -861,6 +1090,7 @@ function TransactionsTable() {
         LastChangedDate: new Date().toISOString(),
       });
       setRejectTarget(null);
+      setExpandedActionsId(null);
       toast?.showToast({
         variant: 'success',
         title: `Transaction ${tx.Reference} rejected`,
@@ -1189,7 +1419,7 @@ function TransactionsTable() {
                     value={filters.search}
                     onChange={(e) => updateFilters({ search: e.target.value })}
                     placeholder="Search…"
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                    className="border-input bg-background h-9 w-full min-w-0 rounded-md border px-2 text-sm"
                   />
                 </div>
 
@@ -1204,7 +1434,7 @@ function TransactionsTable() {
                     id="filter-status"
                     value={filters.status}
                     onChange={(e) => updateFilters({ status: e.target.value })}
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                    className="border-input bg-background h-9 w-full min-w-0 rounded-md border px-2 text-sm"
                   >
                     <option value={STATUS_ALL}>All statuses</option>
                     {STATUS_OPTIONS.map((s) => (
@@ -1228,7 +1458,7 @@ function TransactionsTable() {
                     onChange={(e) =>
                       updateFilters({ fileLogId: e.target.value })
                     }
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                    className="border-input bg-background h-9 w-full min-w-0 rounded-md border px-2 text-sm"
                   >
                     <option value="">All files</option>
                     {fileOptions.map((file) => (
@@ -1256,7 +1486,7 @@ function TransactionsTable() {
                     onChange={(e) =>
                       updateFilters({ fromDate: e.target.value })
                     }
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                    className="border-input bg-background h-9 w-full min-w-0 rounded-md border px-2 text-sm"
                   />
                 </div>
 
@@ -1275,12 +1505,12 @@ function TransactionsTable() {
                     pattern="\d{4}-\d{2}-\d{2}"
                     value={filters.toDate}
                     onChange={(e) => updateFilters({ toDate: e.target.value })}
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                    className="border-input bg-background h-9 w-full min-w-0 rounded-md border px-2 text-sm"
                   />
                 </div>
 
                 <div className="flex gap-2">
-                  <div className="flex flex-1 flex-col gap-1">
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <label
                       htmlFor="filter-min-amount"
                       className="text-muted-foreground text-sm font-medium"
@@ -1295,10 +1525,10 @@ function TransactionsTable() {
                       onChange={(e) =>
                         updateFilters({ minAmount: e.target.value })
                       }
-                      className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                      className="border-input bg-background h-9 w-full min-w-0 rounded-md border px-2 text-sm"
                     />
                   </div>
-                  <div className="flex flex-1 flex-col gap-1">
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <label
                       htmlFor="filter-max-amount"
                       className="text-muted-foreground text-sm font-medium"
@@ -1313,7 +1543,7 @@ function TransactionsTable() {
                       onChange={(e) =>
                         updateFilters({ maxAmount: e.target.value })
                       }
-                      className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                      className="border-input bg-background h-9 w-full min-w-0 rounded-md border px-2 text-sm"
                     />
                   </div>
                 </div>
@@ -1431,156 +1661,184 @@ function TransactionsTable() {
                     </select>
                   </div>
 
-                  <div className="rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          {COLUMNS.map((col) => {
-                            const isActive = col.key === sortColumn;
-                            const SortIcon = !isActive
-                              ? ArrowUpDown
-                              : sortDirection === 'asc'
-                                ? ArrowUp
-                                : ArrowDown;
-                            return (
-                              <TableHead
-                                key={col.key}
-                                aria-sort={
-                                  isActive
-                                    ? sortDirection === 'asc'
-                                      ? 'ascending'
-                                      : 'descending'
-                                    : 'none'
-                                }
-                              >
-                                {/*
-                                  Epic 4 Story 2 (AC-3): the sort trigger carries an
-                                  accessible name that communicates the SORT
-                                  affordance and the column ("Sort by Reference"),
-                                  not just the bare column word — so a screen-reader
-                                  user knows the control sorts and by which column.
-                                  The "Sort by " prefix is a VISUALLY-HIDDEN span
-                                  (sr-only) rather than an aria-label: it folds into
-                                  the button's accessible name (= "Sort by
-                                  Reference") via text content, while the visible
-                                  text stays the bare column label. Using sr-only
-                                  text — not aria-label — keeps the sort button OUT
-                                  of getByLabel()-style label lookups, so the
-                                  "Sort by Status" control never collides with the
-                                  Status FILTER select under a /status/i label probe
-                                  (the Epic-3 locator-precision contract). The
-                                  accessible name still contains the visible label,
-                                  satisfying axe's label-content-name-mismatch rule.
-                                */}
-                                <button
-                                  type="button"
-                                  onClick={() => handleSort(col.key)}
-                                  className="text-foreground hover:text-foreground/80 -ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium"
+                  {/*
+                    Epic 4 Story 3 (NFR3): below 768px render the mobile card list,
+                    at/above the multi-column desktop <table>. EXACTLY ONE of the
+                    two is in the DOM at a time (driven by the JS `useMediaQuery`
+                    hook, not a CSS hide/show), so no wide table forces a horizontal
+                    scroll on mobile and the card layout is observable in jsdom.
+                    Both read the SAME `pageRows` and are driven by the SAME filter
+                    / search / sort / pagination controls (AC-4).
+                  */}
+                  {isMobile ? (
+                    <>
+                      {/*
+                        The sort affordance for the card layout (the cards have no
+                        <thead> to host the per-column sort buttons). Same handler +
+                        accessible names ("Sort by <column>") as the table headers.
+                      */}
+                      <MobileSortControls
+                        sortColumn={sortColumn}
+                        sortDirection={sortDirection}
+                        onSort={handleSort}
+                      />
+                      <TransactionCardList
+                        rows={pageRows}
+                        isApprover={isApprover}
+                        expandedActionsId={expandedActionsId}
+                        onToggleActions={toggleCardActions}
+                        onApprove={openApprove}
+                        onReject={openReject}
+                      />
+                    </>
+                  ) : (
+                    <div className="rounded-lg border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            {COLUMNS.map((col) => {
+                              const isActive = col.key === sortColumn;
+                              const SortIcon = !isActive
+                                ? ArrowUpDown
+                                : sortDirection === 'asc'
+                                  ? ArrowUp
+                                  : ArrowDown;
+                              return (
+                                <TableHead
+                                  key={col.key}
+                                  aria-sort={
+                                    isActive
+                                      ? sortDirection === 'asc'
+                                        ? 'ascending'
+                                        : 'descending'
+                                      : 'none'
+                                  }
                                 >
-                                  <span className="sr-only">Sort by </span>
-                                  {col.label}
-                                  <SortIcon
-                                    aria-hidden="true"
-                                    className="size-3.5 opacity-70"
-                                  />
-                                </button>
+                                  {/*
+                                    Epic 4 Story 2 (AC-3): the sort trigger carries
+                                    an accessible name that communicates the SORT
+                                    affordance and the column ("Sort by Reference"),
+                                    not just the bare column word. The "Sort by "
+                                    prefix is a VISUALLY-HIDDEN span (sr-only) that
+                                    folds into the button's accessible name via text
+                                    content, while the visible text stays the bare
+                                    column label. Using sr-only text — not aria-label
+                                    — keeps the sort button OUT of getByLabel()-style
+                                    label lookups, so "Sort by Status" never collides
+                                    with the Status FILTER select. The accessible
+                                    name still contains the visible label, satisfying
+                                    axe's label-content-name-mismatch rule.
+                                  */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSort(col.key)}
+                                    className="text-foreground hover:text-foreground/80 -ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium"
+                                  >
+                                    <span className="sr-only">Sort by </span>
+                                    {col.label}
+                                    <SortIcon
+                                      aria-hidden="true"
+                                      className="size-3.5 opacity-70"
+                                    />
+                                  </button>
+                                </TableHead>
+                              );
+                            })}
+                            {/* Story 3 actions column — only headed when the Approver
+                                can act, so the read-only Importer/Approved/Rejected
+                                views keep the original eight-column layout. */}
+                            {isApprover && (
+                              <TableHead>
+                                <span className="sr-only">Review actions</span>
                               </TableHead>
-                            );
-                          })}
-                          {/* Story 3 actions column — only headed when the Approver
-                              can act, so the read-only Importer/Approved/Rejected
-                              views keep the original eight-column layout. */}
-                          {isApprover && (
-                            <TableHead>
-                              <span className="sr-only">Review actions</span>
-                            </TableHead>
-                          )}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {pageRows.map((tx) => {
-                          const isImported = tx.Status === IMPORTED_STATUS;
-                          const isRejected = tx.Status === 'Rejected';
-                          return (
-                            <TableRow key={tx.Id}>
-                              <TableCell className="font-medium">
-                                {tx.Reference}
-                              </TableCell>
-                              <TableCell>
-                                {formatTransactionDate(tx.TransactionDate)}
-                              </TableCell>
-                              <TableCell>{tx.AccountNumber}</TableCell>
-                              <TableCell>
-                                {tx.Description}
-                                {/*
-                                  BR8: a Rejected row surfaces its note + who
-                                  rejected it and when, READ-ONLY (no editable
-                                  control remains). Rendered inline beneath the
-                                  description so the trail travels with the row.
-                                */}
-                                {isRejected && tx.UserNote && (
-                                  <span className="text-muted-foreground mt-1 block text-xs">
-                                    <span className="font-medium">
-                                      Rejection note:
-                                    </span>{' '}
-                                    {tx.UserNote}
-                                    {tx.LastChangedUser && (
-                                      <>
-                                        {' '}
-                                        — rejected by {tx.LastChangedUser}
-                                        {tx.LastChangedDate &&
-                                          ` on ${formatTransactionDate(
-                                            tx.LastChangedDate,
-                                          )}`}
-                                      </>
-                                    )}
-                                  </span>
-                                )}
-                              </TableCell>
-                              <TableCell className="tabular-nums">
-                                {formatAmount(tx.Amount)}
-                              </TableCell>
-                              <TableCell>{tx.Currency}</TableCell>
-                              {/* §13-D: render the raw TransactionType value (format unresolved). */}
-                              <TableCell>{tx.TransactionType}</TableCell>
-                              <TableCell>
-                                <StatusBadge status={tx.Status} />
-                              </TableCell>
-                              {/*
-                                Approver-only review actions, visible only on an
-                                Imported row (BR1 — hidden, not disabled, on
-                                Approved/Rejected). Absent entirely for a
-                                non-Approver (BR9, fail-closed).
-                              */}
-                              {isApprover && (
+                            )}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {pageRows.map((tx) => {
+                            const isImported = tx.Status === IMPORTED_STATUS;
+                            const isRejected = tx.Status === 'Rejected';
+                            return (
+                              <TableRow key={tx.Id}>
+                                <TableCell className="font-medium">
+                                  {tx.Reference}
+                                </TableCell>
                                 <TableCell>
-                                  {isImported && (
-                                    <div className="flex items-center gap-2">
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        onClick={() => openApprove(tx)}
-                                      >
-                                        Approve
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => openReject(tx)}
-                                      >
-                                        Reject
-                                      </Button>
-                                    </div>
+                                  {formatTransactionDate(tx.TransactionDate)}
+                                </TableCell>
+                                <TableCell>{tx.AccountNumber}</TableCell>
+                                <TableCell>
+                                  {tx.Description}
+                                  {/*
+                                    BR8: a Rejected row surfaces its note + who
+                                    rejected it and when, READ-ONLY (no editable
+                                    control remains). Rendered inline beneath the
+                                    description so the trail travels with the row.
+                                  */}
+                                  {isRejected && tx.UserNote && (
+                                    <span className="text-muted-foreground mt-1 block text-xs">
+                                      <span className="font-medium">
+                                        Rejection note:
+                                      </span>{' '}
+                                      {tx.UserNote}
+                                      {tx.LastChangedUser && (
+                                        <>
+                                          {' '}
+                                          — rejected by {tx.LastChangedUser}
+                                          {tx.LastChangedDate &&
+                                            ` on ${formatTransactionDate(
+                                              tx.LastChangedDate,
+                                            )}`}
+                                        </>
+                                      )}
+                                    </span>
                                   )}
                                 </TableCell>
-                              )}
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
-                  </div>
+                                <TableCell className="tabular-nums">
+                                  {formatAmount(tx.Amount)}
+                                </TableCell>
+                                <TableCell>{tx.Currency}</TableCell>
+                                {/* §13-D: render the raw TransactionType value (format unresolved). */}
+                                <TableCell>{tx.TransactionType}</TableCell>
+                                <TableCell>
+                                  <StatusBadge status={tx.Status} />
+                                </TableCell>
+                                {/*
+                                  Approver-only review actions, visible only on an
+                                  Imported row (BR1 — hidden, not disabled, on
+                                  Approved/Rejected). Absent entirely for a
+                                  non-Approver (BR9, fail-closed).
+                                */}
+                                {isApprover && (
+                                  <TableCell>
+                                    {isImported && (
+                                      <div className="flex items-center gap-2">
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          onClick={() => openApprove(tx)}
+                                        >
+                                          Approve
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => openReject(tx)}
+                                        >
+                                          Reject
+                                        </Button>
+                                      </div>
+                                    )}
+                                  </TableCell>
+                                )}
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
 
                   <nav
                     aria-label="Pagination"
