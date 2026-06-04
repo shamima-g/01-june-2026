@@ -2,7 +2,7 @@
 
 /**
  * File detail surface (Epic 2, Stories 2 + 4 + 5 — R3, BR4, R11, R13, BR5, R12,
- * BR7).
+ * BR7; hardened in Epic 4, Story 4 — NFR5/NFR8 error-UX consistency).
  *
  * Story 2 established the shared detail shell: one FileLog's metadata + the
  * read-only slice of Transactions belonging to it, with a work-in-progress
@@ -44,6 +44,20 @@
  *     audit header (via the `cancelFile` endpoint helper). On success the file is
  *     deactivated; we navigate back to `/files` so the cancelled file is gone
  *     from the active File Logs list (project-brief §9 Cancel File).
+ *
+ * Story 4 (Epic 4) HARDENS the Cancel path's failure UX — the Epic-2 Story-5
+ * [review] gap. Previously a rejected cancel-DELETE ran `setCancelDialogOpen(false)`
+ * and nothing else: the dialog closed with NO user-visible error (silent). The
+ * page now holds the Cancel path to the SAME visible-error-with-retry bar every
+ * other async surface here already meets (NFR5/NFR8 consistency):
+ *   - On a rejected DELETE the confirmation dialog STAYS OPEN, an assertive
+ *     `role="alert"` explains the cancellation failed, and a "Try again" retry
+ *     affordance re-fires the cancel DELETE. The user is NOT navigated away, so
+ *     they stay on the file detail and can retry.
+ *   - A blocking/assertive failure is surfaced INLINE (role="alert"), NOT as a
+ *     toast — consistent with the Epic-1 toast-vs-inline split (assertive,
+ *     blocking → inline alert).
+ *   - The success path is unchanged: deactivate + navigate to /files.
  *
  * How the data resolves (spec gaps — story summary):
  *   - The spec has NO single-FileLog fetch, so the page resolves the viewed
@@ -177,6 +191,15 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelBlocked, setCancelBlocked] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+
+  // Cancel-DELETE failure surface (Epic 4 Story 4 — the Epic-2 Story-5 [review]
+  // gap, NFR5/NFR8 error-UX consistency). When the DELETE rejects we keep the
+  // confirmation dialog open and flip this flag, which renders an assertive
+  // role="alert" inside the dialog WITH a retry affordance (rather than silently
+  // closing). A blocking/assertive failure is surfaced INLINE, NOT as a toast
+  // (Epic-1 toast-vs-inline split). Cleared whenever the cancel is re-attempted,
+  // succeeds, or the user dismisses the dialog.
+  const [cancelError, setCancelError] = useState(false);
 
   // Resolve the route param once on mount (independent of the data reads so a
   // file-logs re-read on retry never re-resolves the param).
@@ -327,26 +350,35 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
       return;
     }
     setCancelBlocked(false);
+    setCancelError(false);
     setCancelDialogOpen(true);
   }
 
-  // Confirming the cancel: DELETE /v1/files?LogId= with the LastChangedUser audit
-  // header, then (on success) navigate back to /files where the now-deactivated
-  // file no longer appears in the active list (R12, project-brief §9 step 5).
+  // Confirming (or retrying) the cancel: DELETE /v1/files?LogId= with the
+  // LastChangedUser audit header, then (on success) navigate back to /files where
+  // the now-deactivated file no longer appears in the active list (R12,
+  // project-brief §9 step 5).
+  //
+  // On FAILURE (Epic 4 Story 4 — NFR5/NFR8): the dialog STAYS OPEN, `cancelError`
+  // flips so an assertive role="alert" + a "Try again" retry affordance render
+  // inline, and we do NOT navigate. The user stays on the file detail and can
+  // re-fire this same handler via the retry control. An event handler, so these
+  // setState calls are lint-safe.
   async function handleConfirmCancel() {
     if (id === null) return;
     setCancelling(true);
+    setCancelError(false);
     try {
       const auditUser = (await fetchCurrentUserIdentity()) ?? 'unknown';
       await cancelFile(id, auditUser);
       setCancelDialogOpen(false);
       router.push('/files');
     } catch {
-      // Surface the failure as the BR7-style blocked banner copy is reserved for
-      // the approved-guard; a delete failure simply closes the dialog and leaves
-      // the file in place so the user can retry. The client already logged the
-      // typed APIError.
-      setCancelDialogOpen(false);
+      // The DELETE rejected — keep the dialog open and surface a visible,
+      // assertive error WITH a retry affordance instead of closing silently (the
+      // Epic-2 Story-5 gap). We do NOT navigate; the file stays in place and the
+      // user can retry. The client already logged the typed APIError.
+      setCancelError(true);
     } finally {
       setCancelling(false);
     }
@@ -623,7 +655,11 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
 
       {/* Destructive-action confirmation modal (BR3-style): names the file, the
           confirm action is destructive-styled, and default focus rests on the
-          dismiss (Keep file) button so an accidental Enter never deletes. */}
+          dismiss (Keep file) button so an accidental Enter never deletes.
+
+          On a FAILED cancel DELETE (Epic 4 Story 4 — NFR5/NFR8) the dialog stays
+          open and renders an assertive role="alert" plus a "Try again" retry
+          affordance inline, rather than closing silently. */}
       <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -637,6 +673,19 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
               surface. This can&apos;t be undone.
             </DialogDescription>
           </DialogHeader>
+
+          {/* Cancel-failure error: assertive, inline (NOT a toast), with the
+              retry affordance below. Shown only after a rejected DELETE. */}
+          {cancelError && (
+            <div
+              role="alert"
+              className="border-destructive/40 bg-destructive/10 text-destructive rounded-lg border px-4 py-3 text-sm font-medium"
+            >
+              We couldn&apos;t cancel this file. Please check your connection
+              and try again.
+            </div>
+          )}
+
           <DialogFooter>
             {/* Dismiss — the safe default; autofocused (BR3). */}
             <Button
@@ -647,14 +696,20 @@ function FileDetail({ params }: { params: Promise<{ id: string }> }) {
             >
               Keep file
             </Button>
-            {/* Destructive confirm — proceeds with the cancellation. */}
+            {/* After a failure, the primary destructive action becomes an explicit
+                "Try again" retry that re-fires the cancel DELETE; otherwise it is
+                the initial "Confirm". Both call the same handler. */}
             <Button
               type="button"
               variant="destructive"
               disabled={cancelling}
               onClick={handleConfirmCancel}
             >
-              {cancelling ? 'Cancelling…' : 'Confirm'}
+              {cancelling
+                ? 'Cancelling…'
+                : cancelError
+                  ? 'Try again'
+                  : 'Confirm'}
             </Button>
           </DialogFooter>
         </DialogContent>
