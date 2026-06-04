@@ -4,7 +4,7 @@
  * Transactions table (Epic 3, Story 1 — R4, BR9, BR10; Epic 3, Story 2 — R5,
  * R15, BR6; Epic 3, Story 3 — R7, R8, BR1, BR2, BR3, BR8, BR9; Epic 3, Story 4
  * — R9, BR6, BR9; Epic 3, Story 5 — R10; Epic 4, Story 2 — NFR1, NFR4; Epic 4,
- * Story 3 — NFR3).
+ * Story 3 — NFR3; Epic 4, Story 5 — R15, BR8).
  *
  * Replaces the Epic 1 under-construction placeholder at /transactions with the
  * real read-only Transactions surface (CLAUDE.md §7 — replace, don't nest). On
@@ -148,6 +148,22 @@
  *     "Sort by <column>" control row (the headers have no <thead> to host the sort
  *     buttons), so sorting / filtering / pagination remain usable on mobile (AC-4).
  *
+ * Epic 4 Story 5 — POPIA audit-trail surfacing (R15 / BR8) — adds, on top of the
+ * shipped Epic-3/4 surface (all behaviour preserved):
+ *   - Every TERMINAL row (Approved OR Rejected) surfaces WHO last changed it
+ *     (`LastChangedUser` — the acting user's audit-handle email, established
+ *     Epic-2 Story-5 / Epic-3 Story-3) and WHEN (`LastChangedDate`, rendered via
+ *     the shared `formatTransactionDate` YYYY-MM-DD helper), READ-ONLY. An
+ *     Approved row reads "approved by <user> on <date>"; a Rejected row reads
+ *     "rejected by <user> on <date>".
+ *   - This RE-KEYS the Epic-3 Story-3 rejected trail (the [review] resolution):
+ *     the who/when line is keyed on the Rejected STATUS alone — it shows even when
+ *     the rejection note is EMPTY. The "Rejection note: <text>" sub-line is keyed
+ *     on note-presence and renders ONLY when a note exists. So an empty-note
+ *     Rejected row shows who/when but no note line; a noted Rejected row shows
+ *     both. The trail carries no editable control (read-only audit surface). The
+ *     SAME `AuditTrail` render is shared by the desktop row and the mobile card.
+ *
  * This is otherwise a read-only reporting surface — it has no upload control of
  * any kind and never accepts, reads, or transmits a document. The "File" filter is
  * purely a dropdown that narrows the already-loaded transactions to one source
@@ -248,6 +264,9 @@ const STATUS_ALL = '';
 
 /** The single Transaction status on which the review actions are offered (BR1). */
 const IMPORTED_STATUS = 'Imported';
+/** The terminal statuses that carry a read-only audit trail (R15 / BR8). */
+const APPROVED_STATUS = 'Approved';
+const REJECTED_STATUS = 'Rejected';
 /** The Rejection Note ceiling (project-brief R8 / BR2). */
 const MAX_NOTE_LENGTH = 500;
 
@@ -496,6 +515,60 @@ function buildFileSummaries(rows: Transaction[]): FileSummary[] {
   }
   return [...byFile.values()].sort((a, b) =>
     a.recordName.localeCompare(b.recordName),
+  );
+}
+
+/**
+ * The read-only POPIA audit trail for a terminal transaction (Epic 4 Story 5 —
+ * R15 / BR8). Surfaces WHO last changed the row (`LastChangedUser` — the acting
+ * user's audit-handle email) and WHEN (`LastChangedDate`, via the shared
+ * `formatTransactionDate` YYYY-MM-DD helper), keyed on the row's terminal STATUS:
+ *
+ *   - A Rejected row reads "rejected by <user> on <date>" — keyed on the Rejected
+ *     status ALONE, so it surfaces even when the rejection note is empty (this is
+ *     the Epic-3 Story-3 [review] resolution: the who/when no longer hangs off
+ *     note-presence). The "Rejection note: <text>" sub-line is keyed separately on
+ *     note-presence and renders ONLY when a note exists.
+ *   - An Approved row reads "approved by <user> on <date>".
+ *
+ * The who/when sits on ONE element (matched by the "rejected by" / "approved by"
+ * phrasing) so a single text query yields both the user and the date. Returns
+ * null for a non-terminal (Imported) row or when there is no acting user on
+ * record. Purely informational — it renders NO editable control.
+ */
+function AuditTrail({ tx }: { tx: Transaction }) {
+  const isRejected = tx.Status === REJECTED_STATUS;
+  const isApproved = tx.Status === APPROVED_STATUS;
+  if (!isRejected && !isApproved) return null;
+  if (!tx.LastChangedUser) return null;
+
+  const verb = isRejected ? 'rejected' : 'approved';
+  const when = tx.LastChangedDate
+    ? ` on ${formatTransactionDate(tx.LastChangedDate)}`
+    : '';
+
+  return (
+    <span className="text-muted-foreground mt-1 block text-xs">
+      {/*
+        Note sub-line (BR8) — keyed on note-presence, NOT on status: it renders
+        only when a Rejected row actually carries a note. An empty-note Rejected
+        row therefore shows no "Rejection note:" line at all.
+      */}
+      {isRejected && tx.UserNote && (
+        <span className="block">
+          <span className="font-medium">Rejection note:</span> {tx.UserNote}
+        </span>
+      )}
+      {/*
+        Who/when — keyed on the terminal STATUS, so it shows for every Approved
+        AND Rejected row (including an empty-note Rejected row). User + date sit
+        on one element so a single query surfaces both.
+      */}
+      <span className="block">
+        {verb} by {tx.LastChangedUser}
+        {when}
+      </span>
+    </span>
   );
 }
 
@@ -803,8 +876,8 @@ function MobileSortControls({
  *
  * The cards render the SAME `pageRows` the desktop table reads, so the filter /
  * search / sort / pagination controls (which drive `pageRows`) operate on the
- * card list identically (AC-4). A Rejected row surfaces its read-only note trail
- * (BR8), matching the table.
+ * card list identically (AC-4). A terminal row surfaces its read-only audit trail
+ * (Epic 4 Story 5 — R15 / BR8) via the shared `AuditTrail`, matching the table.
  */
 function TransactionCardList({
   rows,
@@ -825,7 +898,6 @@ function TransactionCardList({
     <ul role="list" aria-label="Transactions" className="flex flex-col gap-3">
       {rows.map((tx) => {
         const isImported = tx.Status === IMPORTED_STATUS;
-        const isRejected = tx.Status === 'Rejected';
         const canAct = isApprover && isImported;
         const actionsOpen = expandedActionsId === tx.Id;
         return (
@@ -873,23 +945,12 @@ function TransactionCardList({
                 </p>
 
                 {/*
-                  BR8: a Rejected row surfaces its note + who rejected it and when,
-                  READ-ONLY (mirrors the table row).
+                  POPIA audit trail (Epic 4 Story 5 — R15 / BR8): a terminal
+                  (Approved / Rejected) row surfaces who last changed it and when,
+                  READ-ONLY, plus the rejection note sub-line when a note exists.
+                  Shared with the desktop row.
                 */}
-                {isRejected && tx.UserNote && (
-                  <p className="text-muted-foreground text-xs">
-                    <span className="font-medium">Rejection note:</span>{' '}
-                    {tx.UserNote}
-                    {tx.LastChangedUser && (
-                      <>
-                        {' '}
-                        — rejected by {tx.LastChangedUser}
-                        {tx.LastChangedDate &&
-                          ` on ${formatTransactionDate(tx.LastChangedDate)}`}
-                      </>
-                    )}
-                  </p>
-                )}
+                <AuditTrail tx={tx} />
 
                 {canAct && actionsOpen && (
                   <div className="flex items-center gap-2">
@@ -1045,14 +1106,20 @@ function TransactionsTable() {
   // Confirm Approve: POST approve with the LastChangedUser audit header, then flip
   // the row to Approved with a success toast. A hard failure CLOSES the dialog and
   // surfaces the inline role="alert" error, leaving the row unchanged (NFR5).
-  // Event handler, so the setState calls here are lint-safe.
+  // Event handler, so the setState calls here are lint-safe. On success it also
+  // records the acting user + timestamp so the row's read-only audit trail (Epic 4
+  // Story 5 — R15 / BR8) surfaces who approved it and when.
   async function handleConfirmApprove(tx: Transaction) {
     setSubmitting(true);
     setActionError(null);
     try {
       const auditUser = (await fetchCurrentUserIdentity()) ?? 'unknown';
       await approveTransaction(tx.Id, auditUser);
-      applyOptimisticFlip(tx.Id, { Status: 'Approved' });
+      applyOptimisticFlip(tx.Id, {
+        Status: 'Approved',
+        LastChangedUser: auditUser,
+        LastChangedDate: new Date().toISOString(),
+      });
       setApproveTarget(null);
       setExpandedActionsId(null);
       toast?.showToast({
@@ -1757,7 +1824,6 @@ function TransactionsTable() {
                         <TableBody>
                           {pageRows.map((tx) => {
                             const isImported = tx.Status === IMPORTED_STATUS;
-                            const isRejected = tx.Status === 'Rejected';
                             return (
                               <TableRow key={tx.Id}>
                                 <TableCell className="font-medium">
@@ -1770,29 +1836,15 @@ function TransactionsTable() {
                                 <TableCell>
                                   {tx.Description}
                                   {/*
-                                    BR8: a Rejected row surfaces its note + who
-                                    rejected it and when, READ-ONLY (no editable
-                                    control remains). Rendered inline beneath the
-                                    description so the trail travels with the row.
+                                    POPIA audit trail (Epic 4 Story 5 — R15 / BR8):
+                                    a terminal (Approved / Rejected) row surfaces
+                                    who last changed it and when, READ-ONLY (no
+                                    editable control), plus the rejection note
+                                    sub-line when a note exists. Rendered inline
+                                    beneath the description so the trail travels
+                                    with the row. Shared with the mobile card.
                                   */}
-                                  {isRejected && tx.UserNote && (
-                                    <span className="text-muted-foreground mt-1 block text-xs">
-                                      <span className="font-medium">
-                                        Rejection note:
-                                      </span>{' '}
-                                      {tx.UserNote}
-                                      {tx.LastChangedUser && (
-                                        <>
-                                          {' '}
-                                          — rejected by {tx.LastChangedUser}
-                                          {tx.LastChangedDate &&
-                                            ` on ${formatTransactionDate(
-                                              tx.LastChangedDate,
-                                            )}`}
-                                        </>
-                                      )}
-                                    </span>
-                                  )}
+                                  <AuditTrail tx={tx} />
                                 </TableCell>
                                 <TableCell className="tabular-nums">
                                   {formatAmount(tx.Amount)}
