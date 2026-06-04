@@ -21,10 +21,11 @@
  *   - AC-5: the read-only baseline renders NO Approve / Reject / Export action
  *           controls for ANY role — proven by resolving an Approver (the persona
  *           that LATER gains those actions) and asserting they are absent NOW.
- *           NOTE (post Story-3): the Approve/Reject halves of this baseline have
- *           been superseded by Story 3 (R7/R8) and removed — see the AC-5
- *           describe block below. Only the Export-absent assertion (Story 4)
- *           remains here.
+ *           NOTE (post Story-3 + Story-4): this temporary baseline has now been
+ *           FULLY superseded. Story 3 (R7/R8) ships Approve/Reject for an
+ *           Approver, and Story 4 (R9/BR6) ships the Approver-only Export control
+ *           — so both halves of the AC-5 negative guard are factually retired and
+ *           removed. See the AC-5 describe block below.
  *
  * AC-1 (columns + Status badge on load), AC-2 (header click sorts asc then desc)
  * and AC-3 (page-size 5/10/20/50 default 20, always-rendered controls) are
@@ -177,54 +178,20 @@ describe('Epic 3, Story 1 — Transactions table: empty + error states (AC-4)', 
   });
 });
 
-describe('Epic 3, Story 1 — Transactions table: no Export control yet (AC-5, narrowed)', () => {
-  // AC-5 (narrowed post Story-3): Story 1 established a TEMPORARY read-only
-  // baseline that asserted NO Approve / Reject / Export controls for any role
-  // ("actions arrive in later stories"). Story 3
-  // (epic-3-story-3-review-actions, R7/R8) has since shipped Approve/Reject for an
-  // Approver on Imported rows, so the Approve/Reject halves of that baseline are
-  // factually SUPERSEDED and have been removed here — Story 3 owns that coverage.
-  // What remains true: the EXPORT control is Story 4 and is NOT built yet, so this
-  // test now asserts only that the Export control is absent for an Approver (the
-  // persona that LATER gains it, BR6). The populated table is asserted present
-  // first so this is not a vacuous pass.
-  it('renders no Export action control for an Approver (Export is Story 4)', async () => {
-    // First call (transactions list) → populated; subsequent role-source calls
-    // → the Approver record so fetchCurrentRole resolves "Approver".
-    mockGet.mockImplementation((path: string) => {
-      if (path.includes('/v1/transactions')) {
-        return Promise.resolve(createMockTransactionList());
-      }
-      if (path.includes('/userinfo')) {
-        return Promise.resolve(approverUserRecord);
-      }
-      if (path.includes('/v1/users')) {
-        return Promise.resolve([approverUserRecord]);
-      }
-      return Promise.resolve([]);
-    });
-
-    await renderTransactionsPage();
-
-    // The populated table must be present — guards against a vacuous pass on the
-    // placeholder, where the control would also be "absent".
-    expect(await screen.findByRole('table')).toBeInTheDocument();
-    expect(screen.getByText('TXN-ALPHA')).toBeInTheDocument();
-
-    // Export is not built yet (Story 4). Assert both shapes it might ship as.
-    expect(
-      screen.queryByRole('button', { name: /export/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('link', { name: /export/i }),
-    ).not.toBeInTheDocument();
-  });
-
-  // RETIRED: the former AC-5 "renders no per-row action controls on an Imported
-  // transaction row" test asserted that an Approver saw NO Approve/Reject on an
-  // Imported row. That was a Story-1 TEMPORARY read-only baseline; Story 3
-  // (epic-3-story-3-review-actions, R7/R8) now legitimately ships those exact
-  // controls and owns their coverage, so the assertion is superseded — narrowing
-  // it would leave nothing meaningful that isn't already covered above or by
-  // Story 3, hence it is removed rather than emptied.
+describe('Epic 3, Story 1 — Transactions table: read-only baseline RETIRED (AC-5)', () => {
+  // RETIRED (post Story-3 + Story-4): the AC-5 read-only baseline asserted that an
+  // Approver saw NO Approve / Reject / Export controls — a TEMPORARY Story-1
+  // promise that "actions arrive in later stories". Both halves are now factually
+  // superseded and OWNED by the stories that ship them:
+  //   - Approve / Reject: Story 3 (epic-3-story-3-review-actions, R7/R8) ships the
+  //     Approver-only per-row actions on Imported rows and owns their coverage.
+  //   - Export: Story 4 (epic-3-story-4-export-csv, R9/BR6/BR9) ships the
+  //     Approver-only toolbar Export control and owns its coverage (including the
+  //     fail-closed absence for an Importer / unresolved role).
+  // Keeping a "no Export control" assertion here would now be FALSE for the
+  // shipped surface, so the test is removed rather than emptied — the positive
+  // behaviour lives in the Story-3 and Story-4 suites. This describe block is left
+  // as a tombstone documenting the supersession (testing-policy: retire
+  // forward-reference negative guards in the story that fulfils them).
+  it.todo('AC-5 read-only baseline retired — see Story 3 + Story 4 suites');
 });

@@ -2,7 +2,8 @@
 
 /**
  * Transactions table (Epic 3, Story 1 — R4, BR9, BR10; Epic 3, Story 2 — R5,
- * R15, BR6; Epic 3, Story 3 — R7, R8, BR1, BR2, BR3, BR8, BR9).
+ * R15, BR6; Epic 3, Story 3 — R7, R8, BR1, BR2, BR3, BR8, BR9; Epic 3, Story 4
+ * — R9, BR6, BR9).
  *
  * Replaces the Epic 1 under-construction placeholder at /transactions with the
  * real read-only Transactions surface (CLAUDE.md §7 — replace, don't nest). On
@@ -66,6 +67,22 @@
  *     optimistic flip survives, no success toast — NFR5). The dialog must close so
  *     the alert is not hidden behind the dialog's `aria-hidden` focus trap.
  *
+ * Story 4 adds an Approver-only Export control to the toolbar (R9, BR6, BR9). It
+ * generates a CSV CLIENT-SIDE from the `filteredTransactions` memo — the SAME
+ * single source the table renders from — so the exported row-set equals the
+ * currently-applied filter set EXACTLY (BR6: no more, no less). The CSV carries a
+ * header row of the eight table columns followed by one line per filtered row,
+ * RFC-4180-escaped via the dependency-free `toCsv` helper. The download is
+ * triggered by handing a `text/csv` Blob to `URL.createObjectURL` and clicking a
+ * transient `<a download="...">`; the suggested filename reflects the active
+ * filter set + the export date (project-brief §9 step 4). When the current filter
+ * matches zero rows the control is DISABLED with a tooltip explanation surfaced
+ * via the control's `title` (§9 step 5) — the visible "No matching transactions"
+ * EmptyState already owns the single on-screen explanation in that state, so the
+ * Export control does not render a duplicate visible message. The control is
+ * rendered ONLY for an explicitly-resolved Approver — absent for an Importer /
+ * unknown / unresolved role, fail-closed (BR9), never disabled-for-role.
+ *
  * This is otherwise a read-only reporting surface — it has no upload control of
  * any kind and never accepts, reads, or transmits a document. The "File" filter is
  * purely a dropdown that narrows the already-loaded transactions to one source
@@ -94,7 +111,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
-import { ArrowDown, ArrowUp, ArrowUpDown, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Download, X } from 'lucide-react';
 
 import { RequireSession } from '@/components/session/RequireSession';
 import { StatusBadge } from '@/components/status-badge/StatusBadge';
@@ -128,6 +145,7 @@ import {
   type KnownRole,
 } from '@/lib/auth/roles';
 import { useOptionalToast } from '@/contexts/ToastContext';
+import { toCsv, type CsvColumn } from '@/lib/utils/csv';
 import type { Transaction } from '@/types/api';
 
 /** Page-size options (project-brief R4); 20 is the default. */
@@ -221,6 +239,28 @@ const COLUMNS: ColumnDef[] = [
   },
 ];
 
+/**
+ * The Export CSV columns (R9). One per visible table column, in the same order,
+ * so the exported file mirrors the on-screen grid. Each accessor reads the raw
+ * value, formatting the date + amount the same way the table renders them so the
+ * CSV is consistent with what the Approver sees; `toCsv` handles RFC-4180 field
+ * escaping (commas / quotes / newlines in any field). The exported row-set is the
+ * `filteredTransactions` memo — exactly the currently-applied filter set (BR6).
+ */
+const EXPORT_COLUMNS: CsvColumn<Transaction>[] = [
+  { header: 'Reference', value: (tx) => tx.Reference },
+  {
+    header: 'Transaction Date',
+    value: (tx) => formatTransactionDate(tx.TransactionDate),
+  },
+  { header: 'Account Number', value: (tx) => tx.AccountNumber },
+  { header: 'Description', value: (tx) => tx.Description },
+  { header: 'Amount', value: (tx) => formatAmount(tx.Amount) },
+  { header: 'Currency', value: (tx) => tx.Currency },
+  { header: 'Transaction Type', value: (tx) => String(tx.TransactionType) },
+  { header: 'Status', value: (tx) => tx.Status },
+];
+
 /** Formats the ISO transaction date into a stable, locale-independent display. */
 function formatTransactionDate(iso: string): string {
   const ms = Date.parse(iso);
@@ -254,6 +294,15 @@ function dateInputMs(value: string): number {
   return Number.isNaN(ms) ? NaN : ms;
 }
 
+/** Today's date as `YYYY-MM-DD` (UTC) — the date component of the export filename. */
+function todayStamp(): string {
+  const now = new Date();
+  const yyyy = now.getUTCFullYear();
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(now.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 /** The complete active-filter state. Empty strings mean "not applied". */
 interface FilterState {
   status: string;
@@ -274,6 +323,27 @@ const EMPTY_FILTERS: FilterState = {
   maxAmount: '',
   search: '',
 };
+
+/**
+ * Builds the export filename reflecting the active filter set + date (§9 step 4),
+ * e.g. `transactions-status-imported-2026-06-04.csv`. A hint slug is derived from
+ * the applied filters (status / file / a marker for the range/search dimensions);
+ * with no filter applied the slug is `all`. The slug is sanitised to
+ * filename-safe characters so an arbitrary search term never produces an unsafe
+ * name.
+ */
+function buildExportFilename(filters: FilterState): string {
+  const parts: string[] = [];
+  if (filters.status) parts.push(`status-${filters.status}`);
+  if (filters.fileLogId) parts.push('file');
+  if (filters.fromDate || filters.toDate) parts.push('dated');
+  if (filters.minAmount !== '' || filters.maxAmount !== '')
+    parts.push('amount');
+  if (filters.search.trim()) parts.push('search');
+  const hint = parts.length > 0 ? parts.join('-') : 'all';
+  const safeHint = hint.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+  return `transactions-${safeHint}-${todayStamp()}.csv`;
+}
 
 /** A single active-filter chip: a stable key, the label shown, and how to clear it. */
 interface ActiveFilterChip {
@@ -421,9 +491,10 @@ function TransactionsTable() {
 
   const [state, setState] = useState<LoadState>('loading');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  // Resolved for the fail-closed RBAC scaffold (Story 1). Story 3 CONSUMES it:
-  // the row-actions render only for an explicitly-resolved Approver. A null role
-  // (Importer / unknown / unresolved source) hides them — fail-closed (BR9).
+  // Resolved for the fail-closed RBAC scaffold (Story 1). Story 3 + Story 4
+  // CONSUME it: the row-actions AND the Export control render only for an
+  // explicitly-resolved Approver. A null role (Importer / unknown / unresolved
+  // source) hides them — fail-closed (BR9).
   const [role, setRole] = useState<KnownRole | null>(null);
   // Bumping this counter re-runs the fetch effect — the Retry affordance drives
   // it (an event handler), so the loading transition lives in the effect rather
@@ -466,9 +537,10 @@ function TransactionsTable() {
     };
   }, [fetchNonce]);
 
-  // Resolve the current role for the fail-closed RBAC gate (Story 3 consumes it).
-  // A failed resolve leaves the role null — the row-actions then stay hidden, so
-  // the surface fails CLOSED rather than exposing the actions on an unknown role.
+  // Resolve the current role for the fail-closed RBAC gate (Story 3 + Story 4
+  // consume it). A failed resolve leaves the role null — the row-actions and the
+  // Export control then stay hidden, so the surface fails CLOSED rather than
+  // exposing the actions on an unknown role.
   useEffect(() => {
     if (state !== 'ready') return;
     let active = true;
@@ -487,8 +559,9 @@ function TransactionsTable() {
     setFetchNonce((n) => n + 1);
   }
 
-  // The Approver gate: the row-actions render only for an explicitly-resolved
-  // Approver (fail-closed — an Importer / unknown / unresolved role yields false).
+  // The Approver gate: the row-actions AND the Export control render only for an
+  // explicitly-resolved Approver (fail-closed — an Importer / unknown / unresolved
+  // role yields false).
   const isApprover = role === 'Approver';
 
   // Open the Approve confirm dialog for a row, clearing any prior inline error.
@@ -679,6 +752,29 @@ function TransactionsTable() {
     setPageIndex(0);
   }
 
+  // Export the currently-filtered set as CSV (R9, BR6). Builds the CSV body from
+  // the `filteredTransactions` memo — EXACTLY the rows the table is showing under
+  // the active filter, no more and no less — then triggers a client-side download
+  // by handing a text/csv Blob to URL.createObjectURL and clicking a transient
+  // anchor. The object URL is revoked and the anchor removed afterwards so no DOM
+  // node or blob URL leaks. Event handler, so any state touched here is lint-safe.
+  function handleExport() {
+    // Fail-closed guard: never produce a file for a non-Approver or an empty set,
+    // even if the control were somehow reachable.
+    if (!isApprover || filteredTransactions.length === 0) return;
+
+    const csv = toCsv(filteredTransactions, EXPORT_COLUMNS);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = buildExportFilename(filters);
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(objectUrl);
+  }
+
   // The active-filter chips, derived from the live filter state. Each chip names
   // the filter it represents and carries a per-filter clear handler (R5). Computed
   // inline (at most five chips, trivially cheap) so the clear closures always see
@@ -731,6 +827,8 @@ function TransactionsTable() {
   const hasData = transactions.length > 0;
   const hasResults = filteredTransactions.length > 0;
   const showNoResults = hasData && !hasResults;
+  // R9 / §9 step 5: Export is disabled when zero rows match the current filter.
+  const exportDisabled = !hasResults;
 
   return (
     <main className="container mx-auto px-4 py-8">
@@ -948,6 +1046,36 @@ function TransactionsTable() {
                   </div>
                 </div>
               </div>
+
+              {/*
+                Toolbar (R9): the Approver-only Export control. Rendered ONLY for an
+                explicitly-resolved Approver — absent for an Importer / unknown /
+                unresolved role, fail-closed (BR9), never disabled-for-role. It is
+                disabled when the current filter matches zero rows (§9 step 5); the
+                explanation is surfaced via the control's `title` tooltip. The
+                separate visible "No matching transactions" EmptyState already owns
+                the single on-screen explanation in that state, so the control does
+                NOT render a duplicate visible message (which would otherwise be a
+                second copy of the same explanation on the page).
+              */}
+              {isApprover && (
+                <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleExport}
+                    disabled={exportDisabled}
+                    title={
+                      exportDisabled
+                        ? 'Nothing to export under the current filter.'
+                        : 'Export the currently-filtered transactions as CSV'
+                    }
+                  >
+                    <Download aria-hidden="true" className="size-4" />
+                    Export CSV
+                  </Button>
+                </div>
+              )}
 
               {/*
                 Active-filter chips (R5) — each removable, with a Clear-all. Hidden
