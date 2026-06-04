@@ -349,3 +349,17 @@ The OpenAPI `FileLog` schema uses `CurrentFileName` (the file's name in current 
 ### G — Prototype invariants do not apply
 
 `requirements-2c.md §§Prototype invariants PI-01 to PI-05` (simulated server, fixture-backed data, visual-only validation, role switcher) apply to the prototype deliverable only — they are **not** carried forward to this production BUILD. All server behaviour uses the live backend via proxied Next.js route handlers.
+
+---
+
+## Extension — 2026-06-04
+
+### Fix role-name resolution against the live backend (post-launch bug)
+
+Manual testing against the running backend surfaced a role-resolution defect. The live backend returns role **display-names** `"File Importer"` (importers) and `"Approver"` (approvers) — confirmed via `GET /v1/auth/userinfo` (which is now **confirmed live**: returns 200 with `Roles[].Name`, `Email`, and a `Pages[]` array) and `GET /v1/users`. But the app's `web/src/lib/auth/roles.ts` recognises only the exact canonical strings `"Importer"` / `"Approver"` (`KnownRole`, `LANDING_ROUTES`, `asKnownRole`, `readRole`). Consequently:
+
+- An **Importer is not recognised** → `resolveLandingRoute` falls back to `/transactions` (so the Importer lands on the Approver surface instead of `/files`).
+- Every **Importer-only affordance** gated on `asKnownRole(role) === 'Importer'` (Upload, Retry Validation, Cancel) is **hidden**, blocking the whole import pipeline through the UI.
+- The Approver side works only because `"Approver"` happens to match exactly.
+
+**Required:** introduce a mapping/alias from backend role display-names to the app's canonical `KnownRole` — `"File Importer"` → `Importer`, `"Approver"` → `Approver` — applied wherever a role is resolved/narrowed (`readRole` / `resolveLandingRoute` / `asKnownRole` / `fetchSignedInRole` / `fetchCurrentRole`), so role-based landing (R1) and all RBAC gating (BR9/BR10/BR11) work against the real backend. The alias should be tolerant (case-insensitive, trims/normalises) and easy to extend if more backend role names appear. Update the Vitest + Playwright role mocks to return the **real** backend names (e.g. `"File Importer"`) so the tests reflect production rather than the assumed shorthand, and add a regression test asserting `"File Importer"` resolves to the Importer landing (`/files`) and unlocks the Importer-only controls. No backend change; this is a frontend mapping fix.
