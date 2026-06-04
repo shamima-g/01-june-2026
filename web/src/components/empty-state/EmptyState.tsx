@@ -15,6 +15,13 @@ import { Button } from '@/components/ui/button';
  *
  * The two variants render distinguishable messaging and iconography so the user
  * can tell "there is no data" from "your filter hid the data".
+ *
+ * Accessibility (NFR1): an optional `titleId` stamps a stable DOM id on the
+ * headline so another control can reference it as its accessible description via
+ * `aria-describedby`. The Transactions surface uses this so the disabled Export
+ * control points at the no-results headline ("No matching transactions") as its
+ * AT-exposed reason — reusing the single on-screen explanation rather than
+ * rendering a duplicate help node (Epic 4 Story 2 AC-2).
  */
 
 interface BaseEmptyStateProps {
@@ -22,6 +29,11 @@ interface BaseEmptyStateProps {
   title: string;
   /** Supporting explanatory copy. */
   message: string;
+  /**
+   * Optional DOM id for the headline element, so another control can reference
+   * it (e.g. via `aria-describedby`) as its accessible description.
+   */
+  titleId?: string;
   className?: string;
 }
 
@@ -42,7 +54,7 @@ interface NoResultsEmptyStateProps extends BaseEmptyStateProps {
 export type EmptyStateProps = NoDataEmptyStateProps | NoResultsEmptyStateProps;
 
 export function EmptyState(props: EmptyStateProps) {
-  const { variant, title, message, className } = props;
+  const { variant, title, message, titleId, className } = props;
   const Icon = variant === 'no-results' ? FilterX : Inbox;
 
   return (
@@ -54,7 +66,9 @@ export function EmptyState(props: EmptyStateProps) {
       )}
     >
       <Icon className="size-10 text-muted-foreground" aria-hidden="true" />
-      <h3 className="text-base font-semibold text-foreground">{title}</h3>
+      <h3 id={titleId} className="text-base font-semibold text-foreground">
+        {title}
+      </h3>
       <p className="max-w-sm text-sm text-muted-foreground">{message}</p>
 
       {variant === 'no-results' && (

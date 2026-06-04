@@ -161,6 +161,24 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /*
+   * Global keyboard focus indicator (NFR1 / Epic 4 Story 2 AC-1 — WCAG 2.2 AA
+   * Focus Visible + Focus Appearance). Every keyboard-focusable control — native
+   * <button>, <a>, <input>, <select>, <textarea>, and any [tabindex] — gets a
+   * visible focus ring on :focus-visible (keyboard focus only; a mouse click does
+   * NOT trigger it). The outline colour resolves to the brand `--ring` custom
+   * property, so this stays token-backed with no hex literal
+   * (styling-centralisation). Shadcn's component-level `focus-visible:ring`
+   * utilities still layer on top of this where present; this base rule is the
+   * floor that guarantees a visible indicator on the page's NATIVE controls — the
+   * filter <select>s/<input>s, the search box, and the column-header sort
+   * <button>s — which carry no Shadcn ring classes of their own.
+   */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
 }
 
 /* Animation utilities for modals and toasts (preserved from stadium-8) */

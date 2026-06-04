@@ -94,6 +94,13 @@
  *   - The success-toast assertion is scoped to the "Notifications" toast region
  *     (role="region", aria-label="Notifications") and asserts the toast TITLE —
  *     never a page-wide status-word lookup.
+ *   - The BR9 "Importer sees no Approve/Reject actions" assertion is scoped to the
+ *     transactions TABLE and anchored to the EXACT row-action names "Approve" /
+ *     "Reject". The Story-5 per-file summary panel (outside the table) carries
+ *     "Approved: N" / "Rejected: N" status-COUNT drill-down buttons visible to
+ *     BOTH roles — a page-wide /approve/i | /reject/i count would collide with
+ *     those (and with the Status filter's <option>s); table-scoping plus anchored
+ *     exact names isolates the row actions from both.
  *
  * Dialog / toast / announcer note: the App Router injects a permanently-present
  * EMPTY `<div role="alert">` route announcer, so this spec NEVER relies on a bare
@@ -673,9 +680,24 @@ test.describe('Epic 3, Story 3: Review actions — approve or reject an Imported
     // The shared read-only table renders for the Importer (an Imported row shows).
     await expect(page.getByText(APPROVE_PROBE)).toBeVisible();
 
-    // But the action controls are ABSENT page-wide for the Importer (BR9) — zero
-    // Approve and zero Reject controls anywhere, including on Imported rows.
-    await expect(page.getByRole('button', { name: /approve/i })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: /reject/i })).toHaveCount(0);
+    // The row-level Approve / Reject ACTION controls are ABSENT for the Importer
+    // (BR9) — zero anywhere in the transactions TABLE, including on Imported rows.
+    // The lookup is scoped to the table AND anchored to the EXACT row-action names
+    // "Approve" / "Reject": the Story-5 per-file summary panel (rendered OUTSIDE
+    // the table) carries "Approved: N" / "Rejected: N" status-COUNT drill-down
+    // buttons that are visible to BOTH roles and merely filter the table — they
+    // are NOT approve/reject actions; and the Story-2 Status filter carries hidden
+    // <option>Approved/Rejected</option> entries. A page-wide /approve/i |
+    // /reject/i count would collide with both. Table-scoping plus the anchored
+    // exact names isolates the row ACTIONS from the summary counts and the filter
+    // options. (Locator precision only — the asserted intent, "the Importer sees
+    // no row-level Approve/Reject action controls", is unchanged.)
+    const table = page.getByRole('table');
+    await expect(table.getByRole('button', { name: /^approve$/i })).toHaveCount(
+      0,
+    );
+    await expect(table.getByRole('button', { name: /^reject$/i })).toHaveCount(
+      0,
+    );
   });
 });

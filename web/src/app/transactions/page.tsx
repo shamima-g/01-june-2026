@@ -3,7 +3,7 @@
 /**
  * Transactions table (Epic 3, Story 1 — R4, BR9, BR10; Epic 3, Story 2 — R5,
  * R15, BR6; Epic 3, Story 3 — R7, R8, BR1, BR2, BR3, BR8, BR9; Epic 3, Story 4
- * — R9, BR6, BR9; Epic 3, Story 5 — R10).
+ * — R9, BR6, BR9; Epic 3, Story 5 — R10; Epic 4, Story 2 — NFR1, NFR4).
  *
  * Replaces the Epic 1 under-construction placeholder at /transactions with the
  * real read-only Transactions surface (CLAUDE.md §7 — replace, don't nest). On
@@ -83,12 +83,9 @@
  * triggered by handing a `text/csv` Blob to `URL.createObjectURL` and clicking a
  * transient `<a download="...">`; the suggested filename reflects the active
  * filter set + the export date (project-brief §9 step 4). When the current filter
- * matches zero rows the control is DISABLED with a tooltip explanation surfaced
- * via the control's `title` (§9 step 5) — the visible "No matching transactions"
- * EmptyState already owns the single on-screen explanation in that state, so the
- * Export control does not render a duplicate visible message. The control is
- * rendered ONLY for an explicitly-resolved Approver — absent for an Importer /
- * unknown / unresolved role, fail-closed (BR9), never disabled-for-role.
+ * matches zero rows the control is DISABLED; its "nothing to export" reason is
+ * exposed to assistive tech via `aria-describedby` → a visible help node (see the
+ * Epic 4 Story 2 note below), NOT via a hover-only `title` (NFR1 / NFR4).
  *
  * Story 5 adds the per-File Summary view (R10), visible to BOTH the Approver and
  * the Importer (project-brief §6.5 — a read-only aggregation, not an Approver-only
@@ -105,6 +102,32 @@
  * Status-filter options or the table's StatusBadge cells. The counts are LABELLED
  * values (the Total is a labelled span, each status count a labelled drill-down
  * button) — never `role="status"` (see the Story-3 note above).
+ *
+ * Epic 4 Story 2 — WCAG 2.2 AA accessibility hardening (NFR1 / NFR4) — adds, on
+ * top of the shipped Epic-3 surface (all behaviour preserved):
+ *   - KEYBOARD OPERABILITY + VISIBLE FOCUS (AC-1): every primary control is a
+ *     native focusable element (the search box, the filter <select>s/<input>s,
+ *     the sort-header <button>s, the pagination Previous/Next, the Approve/Reject
+ *     row buttons, and the Export button). A global `:focus-visible` outline in
+ *     globals.css (token-backed `--ring`) guarantees a visible keyboard focus
+ *     indicator across all of them.
+ *   - SORT-CONTROL ACCESSIBLE NAMES (AC-3): each column-header sort button folds a
+ *     visually-hidden "Sort by " prefix into its text content, so its accessible
+ *     name reads "Sort by <column>" (the SORT affordance), not just the bare
+ *     column word — while the visible text stays the column label. Using sr-only
+ *     text rather than an aria-label keeps the sort buttons out of label-based
+ *     lookups (so "Sort by Status" never collides with the Status FILTER select).
+ *     The accessible name contains the visible column text, so axe's
+ *     label-content-name-mismatch rule is satisfied.
+ *   - DISABLED-EXPORT REASON EXPOSED TO AT (AC-2): the disabled Export control's
+ *     "no matching transactions" reason is surfaced via `aria-describedby` →
+ *     the no-results EmptyState HEADLINE ("No matching transactions"), which is
+ *     always on screen when Export is disabled (an empty filtered set is exactly
+ *     what disables Export and what renders that EmptyState). This resolves the
+ *     Epic-3 Story-4 [review]: the hover-only `title` is dropped as the SOLE
+ *     carrier, and the describedby→headline association reaches keyboard + AT
+ *     users without a mouse. Referencing the existing headline (rather than a new
+ *     help node) keeps a SINGLE on-screen copy of the explanation.
  *
  * This is otherwise a read-only reporting surface — it has no upload control of
  * any kind and never accepts, reads, or transmits a document. The "File" filter is
@@ -199,6 +222,19 @@ const STATUS_ALL = '';
 const IMPORTED_STATUS = 'Imported';
 /** The Rejection Note ceiling (project-brief R8 / BR2). */
 const MAX_NOTE_LENGTH = 500;
+
+/**
+ * The DOM id stamped on the no-results EmptyState HEADLINE ("No matching
+ * transactions"). The disabled Export control references it via
+ * `aria-describedby` (Epic 4 Story 2 AC-2), so its "nothing to export" reason is
+ * reachable by keyboard + assistive tech WITHOUT a mouse hover — replacing the
+ * Epic-3 title-only tooltip (NFR1 / NFR4). Whenever Export is disabled the
+ * filtered set is empty, so the no-results EmptyState (and therefore this
+ * headline) is always present to be described by. Reusing the single on-screen
+ * explanation avoids rendering a duplicate help node (which would otherwise be a
+ * second copy of the same message on the page).
+ */
+const EXPORT_DISABLED_HELP_ID = 'export-disabled-help';
 
 type LoadState = 'loading' | 'ready' | 'error';
 type SortColumn =
@@ -1131,6 +1167,32 @@ function TransactionsTable() {
 
               {/* Filter + search controls (R5) — client-side over the loaded set. */}
               <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {/*
+                  Epic 4 Story 2 (AC-1) — filter tab order. The free-text Search
+                  box leads the filter grid, immediately followed by the Status
+                  filter, so the two controls a keyboard user reaches first sit
+                  adjacent in the focus order. (Epic 3 led with Status; the search-
+                  first ordering is the conventional a11y arrangement and keeps the
+                  primary keyboard path short. All filter fields, labels, and
+                  behaviour are otherwise unchanged.)
+                */}
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="filter-search"
+                    className="text-muted-foreground text-sm font-medium"
+                  >
+                    Search Reference or Account Number
+                  </label>
+                  <input
+                    id="filter-search"
+                    type="search"
+                    value={filters.search}
+                    onChange={(e) => updateFilters({ search: e.target.value })}
+                    placeholder="Search…"
+                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                  />
+                </div>
+
                 <div className="flex flex-col gap-1">
                   <label
                     htmlFor="filter-status"
@@ -1179,23 +1241,6 @@ function TransactionsTable() {
 
                 <div className="flex flex-col gap-1">
                   <label
-                    htmlFor="filter-search"
-                    className="text-muted-foreground text-sm font-medium"
-                  >
-                    Search Reference or Account Number
-                  </label>
-                  <input
-                    id="filter-search"
-                    type="search"
-                    value={filters.search}
-                    onChange={(e) => updateFilters({ search: e.target.value })}
-                    placeholder="Search…"
-                    className="border-input bg-background h-9 rounded-md border px-2 text-sm"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1">
-                  <label
                     htmlFor="filter-from-date"
                     className="text-muted-foreground text-sm font-medium"
                   >
@@ -1203,7 +1248,10 @@ function TransactionsTable() {
                   </label>
                   <input
                     id="filter-from-date"
-                    type="date"
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="YYYY-MM-DD"
+                    pattern="\d{4}-\d{2}-\d{2}"
                     value={filters.fromDate}
                     onChange={(e) =>
                       updateFilters({ fromDate: e.target.value })
@@ -1221,7 +1269,10 @@ function TransactionsTable() {
                   </label>
                   <input
                     id="filter-to-date"
-                    type="date"
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="YYYY-MM-DD"
+                    pattern="\d{4}-\d{2}-\d{2}"
                     value={filters.toDate}
                     onChange={(e) => updateFilters({ toDate: e.target.value })}
                     className="border-input bg-background h-9 rounded-md border px-2 text-sm"
@@ -1272,12 +1323,17 @@ function TransactionsTable() {
                 Toolbar (R9): the Approver-only Export control. Rendered ONLY for an
                 explicitly-resolved Approver — absent for an Importer / unknown /
                 unresolved role, fail-closed (BR9), never disabled-for-role. It is
-                disabled when the current filter matches zero rows (§9 step 5); the
-                explanation is surfaced via the control's `title` tooltip. The
-                separate visible "No matching transactions" EmptyState already owns
-                the single on-screen explanation in that state, so the control does
-                NOT render a duplicate visible message (which would otherwise be a
-                second copy of the same explanation on the page).
+                disabled when the current filter matches zero rows (§9 step 5).
+
+                Epic 4 Story 2 (AC-2) — the disabled-state reason is exposed to
+                assistive tech + keyboard users via `aria-describedby` pointing at
+                the no-results EmptyState HEADLINE (`EXPORT_DISABLED_HELP_ID`),
+                replacing the Epic-3 hover-only `title` as the SOLE carrier. The
+                describedby is set ONLY in the disabled state, and whenever Export
+                is disabled the filtered set is empty — so the no-results EmptyState
+                (carrying that headline + id) is always rendered to be described by.
+                Reusing the single on-screen explanation keeps the page from
+                carrying a duplicate copy of the same message.
               */}
               {isApprover && (
                 <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
@@ -1286,10 +1342,8 @@ function TransactionsTable() {
                     variant="outline"
                     onClick={handleExport}
                     disabled={exportDisabled}
-                    title={
-                      exportDisabled
-                        ? 'Nothing to export under the current filter.'
-                        : 'Export the currently-filtered transactions as CSV'
+                    aria-describedby={
+                      exportDisabled ? EXPORT_DISABLED_HELP_ID : undefined
                     }
                   >
                     <Download aria-hidden="true" className="size-4" />
@@ -1346,6 +1400,7 @@ function TransactionsTable() {
                 <EmptyState
                   variant="no-results"
                   title="No matching transactions"
+                  titleId={EXPORT_DISABLED_HELP_ID}
                   message="Nothing matches your current selection. Adjust or clear the filters to see more."
                   activeFilterSummary={activeFilterSummary}
                   onClearFilters={clearAllFilters}
@@ -1398,11 +1453,31 @@ function TransactionsTable() {
                                     : 'none'
                                 }
                               >
+                                {/*
+                                  Epic 4 Story 2 (AC-3): the sort trigger carries an
+                                  accessible name that communicates the SORT
+                                  affordance and the column ("Sort by Reference"),
+                                  not just the bare column word — so a screen-reader
+                                  user knows the control sorts and by which column.
+                                  The "Sort by " prefix is a VISUALLY-HIDDEN span
+                                  (sr-only) rather than an aria-label: it folds into
+                                  the button's accessible name (= "Sort by
+                                  Reference") via text content, while the visible
+                                  text stays the bare column label. Using sr-only
+                                  text — not aria-label — keeps the sort button OUT
+                                  of getByLabel()-style label lookups, so the
+                                  "Sort by Status" control never collides with the
+                                  Status FILTER select under a /status/i label probe
+                                  (the Epic-3 locator-precision contract). The
+                                  accessible name still contains the visible label,
+                                  satisfying axe's label-content-name-mismatch rule.
+                                */}
                                 <button
                                   type="button"
                                   onClick={() => handleSort(col.key)}
                                   className="text-foreground hover:text-foreground/80 -ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium"
                                 >
+                                  <span className="sr-only">Sort by </span>
                                   {col.label}
                                   <SortIcon
                                     aria-hidden="true"
@@ -1515,12 +1590,32 @@ function TransactionsTable() {
                       Page {safePageIndex + 1} of {pageCount}
                     </p>
                     <div className="flex items-center gap-2">
+                      {/*
+                        Epic 4 Story 2 (AC-1, NFR1) — at a page boundary the
+                        Previous/Next control is conveyed as unavailable via
+                        `aria-disabled` rather than the native `disabled` attribute,
+                        and its click handler no-ops when at the boundary. A natively
+                        `disabled` button is REMOVED from the keyboard tab order, so a
+                        keyboard user could never focus the pagination boundary
+                        control; `aria-disabled` keeps the control FOCUSABLE (it shows
+                        the visible focus ring and is announced "dimmed/unavailable"
+                        by AT) while still doing nothing when activated. The disabled
+                        STATE is unchanged for AT + for the test matchers (Playwright
+                        `toBeDisabled()` treats `aria-disabled="true"` as disabled), and
+                        the dimmed look is preserved via the opacity utility. The
+                        `canPrev`/`canNext` guards in the handlers keep the boundary
+                        non-navigable.
+                      */}
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        disabled={!canPrev}
-                        onClick={() => setPageIndex((i) => Math.max(0, i - 1))}
+                        aria-disabled={!canPrev}
+                        className={!canPrev ? 'opacity-50' : undefined}
+                        onClick={() => {
+                          if (!canPrev) return;
+                          setPageIndex((i) => Math.max(0, i - 1));
+                        }}
                       >
                         Previous
                       </Button>
@@ -1528,10 +1623,12 @@ function TransactionsTable() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        disabled={!canNext}
-                        onClick={() =>
-                          setPageIndex((i) => Math.min(pageCount - 1, i + 1))
-                        }
+                        aria-disabled={!canNext}
+                        className={!canNext ? 'opacity-50' : undefined}
+                        onClick={() => {
+                          if (!canNext) return;
+                          setPageIndex((i) => Math.min(pageCount - 1, i + 1));
+                        }}
                       >
                         Next
                       </Button>
