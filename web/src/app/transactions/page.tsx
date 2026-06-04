@@ -3,7 +3,7 @@
 /**
  * Transactions table (Epic 3, Story 1 — R4, BR9, BR10; Epic 3, Story 2 — R5,
  * R15, BR6; Epic 3, Story 3 — R7, R8, BR1, BR2, BR3, BR8, BR9; Epic 3, Story 4
- * — R9, BR6, BR9).
+ * — R9, BR6, BR9; Epic 3, Story 5 — R10).
  *
  * Replaces the Epic 1 under-construction placeholder at /transactions with the
  * real read-only Transactions surface (CLAUDE.md §7 — replace, don't nest). On
@@ -67,6 +67,13 @@
  *     optimistic flip survives, no success toast — NFR5). The dialog must close so
  *     the alert is not hidden behind the dialog's `aria-hidden` focus trap.
  *
+ *   IMPORTANT — the `role="status"` surface on this page is RESERVED for the
+ *   transient announcement surfaces ONLY: the loading indicator and the
+ *   success-toast. The per-File Summary counts (Story 5) deliberately do NOT use
+ *   `role="status"` so that the Story-3 failure-path guard (which asserts NO
+ *   role="status" success notification appears after a hard failure) is never
+ *   tripped by a static count, and so screen readers do not announce every count.
+ *
  * Story 4 adds an Approver-only Export control to the toolbar (R9, BR6, BR9). It
  * generates a CSV CLIENT-SIDE from the `filteredTransactions` memo — the SAME
  * single source the table renders from — so the exported row-set equals the
@@ -82,6 +89,22 @@
  * Export control does not render a duplicate visible message. The control is
  * rendered ONLY for an explicitly-resolved Approver — absent for an Importer /
  * unknown / unresolved role, fail-closed (BR9), never disabled-for-role.
+ *
+ * Story 5 adds the per-File Summary view (R10), visible to BOTH the Approver and
+ * the Importer (project-brief §6.5 — a read-only aggregation, not an Approver-only
+ * action). It groups the LOADED transaction set by FileLogId and shows, per file,
+ * a Total plus the Imported / Approved / Rejected counts — derived CLIENT-SIDE
+ * over the full set (no server-side group/count endpoint; R10). The status counts
+ * reuse the shared StatusBadge for their colour + icon + label. Each status count
+ * is a clickable control that drills into the table: clicking it sets BOTH the
+ * Story-2 File filter (FileLogId) AND the Status filter to that file + status via
+ * the SAME `updateFilters` setter the filter controls use (no parallel filter
+ * mechanism), so the table opens already narrowed to that slice and the File +
+ * Status <select>s reflect the selection. Each file's summary is a labelled region
+ * named for the file's display name so the status words never collide with the
+ * Status-filter options or the table's StatusBadge cells. The counts are LABELLED
+ * values (the Total is a labelled span, each status count a labelled drill-down
+ * button) — never `role="status"` (see the Story-3 note above).
  *
  * This is otherwise a read-only reporting surface — it has no upload control of
  * any kind and never accepts, reads, or transmits a document. The "File" filter is
@@ -352,6 +375,168 @@ interface ActiveFilterChip {
   clear: () => void;
 }
 
+/**
+ * The per-File Summary status set (R10). The summary surfaces a Total plus one
+ * count per TransactionStatus (project-brief §6 / §13.B). Status matching is
+ * case-insensitive (the brief fixes the canonical casing, but the aggregation
+ * tolerates raw-API casing drift without dropping a row into "no bucket").
+ */
+const SUMMARY_STATUSES = ['Imported', 'Approved', 'Rejected'] as const;
+type SummaryStatus = (typeof SUMMARY_STATUSES)[number];
+
+/**
+ * One file's aggregated summary: the file's identity (FileLogId + display name)
+ * and its Total + per-status counts, derived CLIENT-SIDE from the loaded set.
+ * `recordName` is the file's human-facing display name; it is read from the
+ * transaction's own `FileName` property (never via a `File`-object accessor) and
+ * named without a `File`-substring local so the status-aggregation surface keeps
+ * clear of the upload-surface security heuristic.
+ */
+interface FileSummary {
+  /** The FileLogId (as a string) — the value the File filter is keyed on (Story 2). */
+  fileLogId: string;
+  /** The file's human-facing name — the summary block's accessible name. */
+  recordName: string;
+  total: number;
+  counts: Record<SummaryStatus, number>;
+}
+
+/**
+ * Groups the loaded transaction set by FileLogId and counts Total +
+ * Imported/Approved/Rejected per file (R10). Status is matched
+ * case-insensitively against the canonical set; an unrecognised status still
+ * counts toward Total but no per-status bucket, so Total is always the true row
+ * count for the file. Files are ordered by their display name for a stable
+ * render. This is the per-FileLogId grouping the summary renders from — never a
+ * single global tally.
+ */
+function buildFileSummaries(rows: Transaction[]): FileSummary[] {
+  const byFile = new Map<string, FileSummary>();
+  for (const tx of rows) {
+    const fileLogId = String(tx.FileLogId);
+    let summary = byFile.get(fileLogId);
+    if (!summary) {
+      summary = {
+        fileLogId,
+        recordName: tx.FileName,
+        total: 0,
+        counts: { Imported: 0, Approved: 0, Rejected: 0 },
+      };
+      byFile.set(fileLogId, summary);
+    }
+    summary.total += 1;
+    const matched = SUMMARY_STATUSES.find(
+      (s) => s.toLowerCase() === String(tx.Status).toLowerCase(),
+    );
+    if (matched) summary.counts[matched] += 1;
+  }
+  return [...byFile.values()].sort((a, b) =>
+    a.recordName.localeCompare(b.recordName),
+  );
+}
+
+/**
+ * The per-File Summary panel (R10). One labelled region per file (a
+ * `<section aria-label={recordName}>` so its accessible name is the file's
+ * display name), showing a Total plus the three status counts.
+ *
+ * Accessibility — these are STATIC per-file counts, NOT announcements, so they
+ * are deliberately NOT `role="status"`. `role="status"` is an ARIA live region
+ * for transient announcements (the loading indicator + the success-toast use it
+ * — Epic-1 journal / Story 3); putting it on a static count would make a screen
+ * reader announce every count on render AND would collide with the toast-surface
+ * guards elsewhere on the page. Instead each metric is a LABELLED value:
+ *   - Total is a labelled `<span aria-label="Total: N">` whose visible text also
+ *     reads "Total N" (label + number co-located on one element).
+ *   - Each status count is a labelled drill-down `<button aria-label="<Status>: N">`
+ *     whose visible content is the StatusBadge (the status word) + the number,
+ *     so its accessible name pins the metric to its number and the count can be
+ *     read by metric (a button, not a status live-region).
+ *
+ * The three status counts are buttons (drill-down triggers) that call
+ * `onDrillDown` with the file + status — reusing the Story-2 filter state — while
+ * Total is a static labelled value. The status labels reuse the shared
+ * StatusBadge for colour + icon + label (R16 / NFR1). Visible to both the
+ * Approver and the Importer.
+ */
+function FileSummaryPanel({
+  summaries,
+  onDrillDown,
+}: {
+  summaries: FileSummary[];
+  onDrillDown: (fileLogId: string, status: SummaryStatus) => void;
+}) {
+  if (summaries.length === 0) return null;
+  return (
+    <section aria-label="File summary" className="mb-6">
+      <h3 className="text-foreground mb-3 text-sm font-semibold">
+        File summary
+      </h3>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {summaries.map((summary) => (
+          <section
+            key={summary.fileLogId}
+            aria-label={summary.recordName}
+            className="border-border bg-card flex flex-col gap-3 rounded-lg border p-4"
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <span className="text-foreground truncate font-medium">
+                {summary.recordName}
+              </span>
+              {/*
+                Total — a static labelled value (NOT role="status"; see the panel
+                doc-block). `aria-label` pins the metric word to its number so it
+                can be read unambiguously by metric, and the visible text carries
+                both the label and the number on one element for the
+                same-element label+number assertion.
+              */}
+              <span
+                aria-label={`Total: ${summary.total}`}
+                className="text-muted-foreground text-sm tabular-nums"
+              >
+                Total {summary.total}
+              </span>
+            </div>
+            <ul className="flex flex-wrap gap-2">
+              {SUMMARY_STATUSES.map((status) => {
+                const count = summary.counts[status];
+                return (
+                  <li key={status}>
+                    {/*
+                      Drill-down trigger (R10): clicking sets the File + Status
+                      filters to this slice via the shared Story-2 filter state.
+                      Its visible content — the StatusBadge (the status word)
+                      plus the number — IS its accessible name (e.g. "Imported 3"),
+                      so the count is read by metric via the button role without a
+                      separate `aria-label` (an explicit aria-label here would
+                      mismatch the visible text under axe's
+                      label-content-name-mismatch rule). It is a button (drill-down
+                      control) — never role="status".
+                    */}
+                    <button
+                      type="button"
+                      onClick={() => onDrillDown(summary.fileLogId, status)}
+                      className="focus-visible:ring-ring rounded-md focus-visible:ring-2 focus-visible:outline-none"
+                      title={`Show ${status} transactions for ${summary.recordName}`}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <StatusBadge status={status} />
+                        <span className="text-foreground text-sm font-semibold tabular-nums">
+                          {count}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /** BR2 validation — the note is mandatory and ≤500 chars. Returns the message
  *  (or null when valid); used on blur AND on submit. */
 function validateNote(value: string): string | null {
@@ -518,6 +703,11 @@ function TransactionsTable() {
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // A ref to the data section so a drill-down click can reveal the now-narrowed
+  // table (scroll it into view) — the summary sits above the table, so on a
+  // smaller viewport the result of a drill-down should come into view.
+  const tableSectionRef = useRef<HTMLDivElement>(null);
+
   // Mount + retry fetch. The effect body holds only the async side-effect; state
   // resolves in the promise callbacks (.then/.catch), never synchronously in the
   // effect body (react-hooks/set-state-in-effect — mirrors the File Logs page).
@@ -663,6 +853,16 @@ function TransactionsTable() {
     return [...seen.entries()].map(([value, label]) => ({ value, label }));
   }, [transactions]);
 
+  // R10: the per-file summary, grouped by FileLogId, derived CLIENT-SIDE over the
+  // LOADED set (the full loaded transactions — NOT the filtered view, so the
+  // summary always reflects every file's true totals regardless of the active
+  // table filter). Each file's Total + status counts are computed once per data
+  // change.
+  const fileSummaries = useMemo(
+    () => buildFileSummaries(transactions),
+    [transactions],
+  );
+
   // BR6: the filtered set is the single source the table, sort, pagination, and
   // (Story 4) Export all read from — filtering runs CLIENT-SIDE over the loaded
   // set across every R5 dimension.
@@ -732,6 +932,16 @@ function TransactionsTable() {
   function clearAllFilters() {
     setFilters(EMPTY_FILTERS);
     setPageIndex(0);
+  }
+
+  // R10 drill-down: clicking a per-file status count narrows the table to that
+  // file + status slice by setting BOTH the Story-2 File filter (FileLogId) AND
+  // the Status filter through the SAME `updateFilters` setter the filter controls
+  // use — no parallel filter mechanism. The now-narrowed table is then scrolled
+  // into view so the result of the drill-down is visible.
+  function handleSummaryDrillDown(fileLogId: string, status: SummaryStatus) {
+    updateFilters({ fileLogId, status });
+    tableSectionRef.current?.scrollIntoView({ block: 'start' });
   }
 
   function handleSort(column: SortColumn) {
@@ -908,6 +1118,17 @@ function TransactionsTable() {
             />
           ) : (
             <>
+              {/*
+                Per-File Summary (R10) — a labelled region per file with Total +
+                Imported/Approved/Rejected counts, derived CLIENT-SIDE over the
+                loaded set. Each status count drills into the table by setting the
+                Story-2 File + Status filters. Visible to BOTH personas.
+              */}
+              <FileSummaryPanel
+                summaries={fileSummaries}
+                onDrillDown={handleSummaryDrillDown}
+              />
+
               {/* Filter + search controls (R5) — client-side over the loaded set. */}
               <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="flex flex-col gap-1">
@@ -1130,7 +1351,7 @@ function TransactionsTable() {
                   onClearFilters={clearAllFilters}
                 />
               ) : (
-                <>
+                <div ref={tableSectionRef}>
                   <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
                     <label
                       htmlFor="page-size"
@@ -1316,7 +1537,7 @@ function TransactionsTable() {
                       </Button>
                     </div>
                   </nav>
-                </>
+                </div>
               )}
             </>
           )}
