@@ -21,6 +21,10 @@
  *   - AC-5: the read-only baseline renders NO Approve / Reject / Export action
  *           controls for ANY role — proven by resolving an Approver (the persona
  *           that LATER gains those actions) and asserting they are absent NOW.
+ *           NOTE (post Story-3): the Approve/Reject halves of this baseline have
+ *           been superseded by Story 3 (R7/R8) and removed — see the AC-5
+ *           describe block below. Only the Export-absent assertion (Story 4)
+ *           remains here.
  *
  * AC-1 (columns + Status badge on load), AC-2 (header click sorts asc then desc)
  * and AC-3 (page-size 5/10/20/50 default 20, always-rendered controls) are
@@ -48,7 +52,7 @@
  *
  * The axe matcher is registered globally by web/vitest.setup.ts.
  */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { axe } from 'vitest-axe';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -173,13 +177,18 @@ describe('Epic 3, Story 1 — Transactions table: empty + error states (AC-4)', 
   });
 });
 
-describe('Epic 3, Story 1 — Transactions table: read-only RBAC baseline (AC-5)', () => {
-  // AC-5: the read-only baseline renders NO Approve / Reject / Export action
-  // controls for ANY role. We resolve an APPROVER — the persona that LATER gains
-  // Approve/Reject/Export (BR1, BR6) — and assert those controls are absent NOW,
-  // a contrast assertion that breaks the moment a row-action leaks in early. The
-  // populated table is asserted present first so this is not a vacuous pass.
-  it('renders no Approve / Reject / Export action controls for an Approver', async () => {
+describe('Epic 3, Story 1 — Transactions table: no Export control yet (AC-5, narrowed)', () => {
+  // AC-5 (narrowed post Story-3): Story 1 established a TEMPORARY read-only
+  // baseline that asserted NO Approve / Reject / Export controls for any role
+  // ("actions arrive in later stories"). Story 3
+  // (epic-3-story-3-review-actions, R7/R8) has since shipped Approve/Reject for an
+  // Approver on Imported rows, so the Approve/Reject halves of that baseline are
+  // factually SUPERSEDED and have been removed here — Story 3 owns that coverage.
+  // What remains true: the EXPORT control is Story 4 and is NOT built yet, so this
+  // test now asserts only that the Export control is absent for an Approver (the
+  // persona that LATER gains it, BR6). The populated table is asserted present
+  // first so this is not a vacuous pass.
+  it('renders no Export action control for an Approver (Export is Story 4)', async () => {
     // First call (transactions list) → populated; subsequent role-source calls
     // → the Approver record so fetchCurrentRole resolves "Approver".
     mockGet.mockImplementation((path: string) => {
@@ -198,54 +207,24 @@ describe('Epic 3, Story 1 — Transactions table: read-only RBAC baseline (AC-5)
     await renderTransactionsPage();
 
     // The populated table must be present — guards against a vacuous pass on the
-    // placeholder, where the controls would also be "absent".
+    // placeholder, where the control would also be "absent".
     expect(await screen.findByRole('table')).toBeInTheDocument();
     expect(screen.getByText('TXN-ALPHA')).toBeInTheDocument();
 
-    // No action controls of any kind on the read-only baseline.
-    expect(
-      screen.queryByRole('button', { name: /approve/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /reject/i }),
-    ).not.toBeInTheDocument();
+    // Export is not built yet (Story 4). Assert both shapes it might ship as.
     expect(
       screen.queryByRole('button', { name: /export/i }),
     ).not.toBeInTheDocument();
-    // Export sometimes ships as a link rather than a button — assert both shapes.
     expect(
       screen.queryByRole('link', { name: /export/i }),
     ).not.toBeInTheDocument();
   });
 
-  // AC-5 (per-row contrast): scoped to a single Imported transaction row — the
-  // exact status that LATER exposes Approve/Reject (BR1) — there are still no
-  // per-row action controls. Proves the read-only baseline holds at row level,
-  // not just globally.
-  it('renders no per-row action controls on an Imported transaction row', async () => {
-    mockGet.mockImplementation((path: string) => {
-      if (path.includes('/v1/transactions')) {
-        return Promise.resolve(createMockTransactionList());
-      }
-      if (path.includes('/userinfo')) {
-        return Promise.resolve(approverUserRecord);
-      }
-      if (path.includes('/v1/users')) {
-        return Promise.resolve([approverUserRecord]);
-      }
-      return Promise.resolve([]);
-    });
-
-    await renderTransactionsPage();
-
-    // TXN-CHARLIE is the Imported row in createMockTransactionList().
-    const importedRow = (await screen.findByText('TXN-CHARLIE')).closest('tr')!;
-    expect(importedRow).not.toBeNull();
-    expect(
-      within(importedRow).queryByRole('button', { name: /approve/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(importedRow).queryByRole('button', { name: /reject/i }),
-    ).not.toBeInTheDocument();
-  });
+  // RETIRED: the former AC-5 "renders no per-row action controls on an Imported
+  // transaction row" test asserted that an Approver saw NO Approve/Reject on an
+  // Imported row. That was a Story-1 TEMPORARY read-only baseline; Story 3
+  // (epic-3-story-3-review-actions, R7/R8) now legitimately ships those exact
+  // controls and owns their coverage, so the assertion is superseded — narrowing
+  // it would leave nothing meaningful that isn't already covered above or by
+  // Story 3, hence it is removed rather than emptied.
 });

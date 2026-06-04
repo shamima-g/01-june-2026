@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * Transactions table (Epic 3, Story 1 — R4, BR9, BR10; Epic 3, Story 2 — R5, R15, BR6).
+ * Transactions table (Epic 3, Story 1 — R4, BR9, BR10; Epic 3, Story 2 — R5,
+ * R15, BR6; Epic 3, Story 3 — R7, R8, BR1, BR2, BR3, BR8, BR9).
  *
  * Replaces the Epic 1 under-construction placeholder at /transactions with the
  * real read-only Transactions surface (CLAUDE.md §7 — replace, don't nest). On
@@ -36,22 +37,45 @@
  *     region is hidden in that case so the EmptyState owns the single
  *     active-filter summary + Clear-all surface.
  *
- * This is a read-only reporting surface — it has no upload control of any kind and
- * never accepts, reads, or transmits a document. The "File" filter is purely a
- * dropdown that narrows the already-loaded transactions to one source file,
- * identified by FileLogId and shown by FileName; its dropdown entries carry a
- * value/label pair (the standard shape for a select control's options).
+ * Story 3 CONSUMES the Story-1 fail-closed RBAC scaffold to layer per-row Approve
+ * / Reject review actions on top of the table (R7, R8) WITHOUT disturbing the
+ * read-only surface above:
+ *   - The actions render ONLY on a row whose Status is `Imported` AND only when
+ *     the resolved role is an Approver (`asKnownRole(role) === 'Approver'`). On
+ *     `Approved`/`Rejected` rows they are HIDDEN — not disabled (BR1) — and for an
+ *     Importer / unknown / unresolved role they are ABSENT page-wide, fail-closed
+ *     (BR9).
+ *   - Approve opens a confirmation modal NAMING the Reference, destructive-styled
+ *     primary, default focus on Cancel (BR3); confirming POSTs
+ *     `/v1/transactions/approve?TransactionId=<id>` with the `LastChangedUser`
+ *     header (via `approveTransaction`).
+ *   - Reject opens a modal with a MANDATORY multi-line Rejection Note (≤500 chars,
+ *     character counter) whose submit is disabled until a non-empty note is
+ *     entered; the note is validated on blur AND on submit (BR2). Confirming POSTs
+ *     `/v1/transactions/reject?TransactionId=<id>` with body `{"UserNote": "..."}`
+ *     and the `LastChangedUser` header (via `rejectTransaction`). The reject dialog
+ *     is its OWN component so a keystroke re-renders only the note field, not the
+ *     whole table (keeps a 500-char note responsive).
+ *   - On success the row's Status flips OPTIMISTICALLY in place (Approved /
+ *     Rejected) with a success toast (useToast, role="status", auto-dismiss 4–8 s
+ *     — R7 / R8). A Rejected row then surfaces its note + LastChangedUser /
+ *     LastChangedDate READ-ONLY (BR8) — no editable note control remains.
+ *   - A hard backend failure CLOSES the dialog and surfaces an ASSERTIVE inline
+ *     `role="alert"` error in the page (distinct from the toast surface, which is
+ *     role="status" — Epic-1 journal) and leaves the row's Status UNCHANGED (no
+ *     optimistic flip survives, no success toast — NFR5). The dialog must close so
+ *     the alert is not hidden behind the dialog's `aria-hidden` focus trap.
+ *
+ * This is otherwise a read-only reporting surface — it has no upload control of
+ * any kind and never accepts, reads, or transmits a document. The "File" filter is
+ * purely a dropdown that narrows the already-loaded transactions to one source
+ * file, identified by FileLogId and shown by FileName; its dropdown entries carry
+ * a value/label pair (the standard shape for a select control's options).
  *
  * Pagination controls are ALWAYS rendered; navigation is disabled when there is
  * no page to move to (R4 / R14 pattern, mirrored from the Epic 2 File Logs
  * dashboard). Sort toggles ascending → descending on repeated header clicks
  * (single-column, ascending on first click).
- *
- * Read-only baseline (BR9 / BR10): this story renders NO Approve / Reject /
- * Export action controls for ANY role — both Approver and Importer see the same
- * read-only table. The fail-closed RBAC scaffold (fetchCurrentRole + asKnownRole)
- * is resolved here so later Epic 3 stories can gate the row-actions onto it; an
- * unresolved role leaves the surface read-only (fail-closed).
  *
  * TransactionType display (§13-D): the value format is unresolved across the spec
  * (`Debit`/`Credit`) and the BRD sample data (`C`/`D`). The column renders the
@@ -68,7 +92,7 @@
  * backend 401s data reads without it).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
 import { ArrowDown, ArrowUp, ArrowUpDown, X } from 'lucide-react';
 
@@ -76,6 +100,14 @@ import { RequireSession } from '@/components/session/RequireSession';
 import { StatusBadge } from '@/components/status-badge/StatusBadge';
 import { EmptyState } from '@/components/empty-state/EmptyState';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Table,
   TableBody,
@@ -86,10 +118,16 @@ import {
 } from '@/components/ui/table';
 import { getTransactions } from '@/lib/api/transactions';
 import {
+  approveTransaction,
+  rejectTransaction,
+} from '@/lib/api/transaction-actions';
+import {
   fetchCurrentRole,
+  fetchCurrentUserIdentity,
   asKnownRole,
   type KnownRole,
 } from '@/lib/auth/roles';
+import { useOptionalToast } from '@/contexts/ToastContext';
 import type { Transaction } from '@/types/api';
 
 /** Page-size options (project-brief R4); 20 is the default. */
@@ -115,6 +153,11 @@ const pageSizeSchema = z.coerce
 const STATUS_OPTIONS = ['Imported', 'Approved', 'Rejected'] as const;
 /** Sentinel value for "no status filter applied" on the native <select>. */
 const STATUS_ALL = '';
+
+/** The single Transaction status on which the review actions are offered (BR1). */
+const IMPORTED_STATUS = 'Imported';
+/** The Rejection Note ceiling (project-brief R8 / BR2). */
+const MAX_NOTE_LENGTH = 500;
 
 type LoadState = 'loading' | 'ready' | 'error';
 type SortColumn =
@@ -239,13 +282,149 @@ interface ActiveFilterChip {
   clear: () => void;
 }
 
+/** BR2 validation — the note is mandatory and ≤500 chars. Returns the message
+ *  (or null when valid); used on blur AND on submit. */
+function validateNote(value: string): string | null {
+  if (value.trim().length === 0) {
+    return 'Please provide a rejection note.';
+  }
+  if (value.length > MAX_NOTE_LENGTH) {
+    return `The note must be ${MAX_NOTE_LENGTH} characters or fewer.`;
+  }
+  return null;
+}
+
+/**
+ * The Reject confirmation modal (BR2 / BR3). Its OWN component so a keystroke in
+ * the multi-line note re-renders only this dialog, not the whole transactions
+ * table — keeping a long (≤500-char) note responsive. Names the Reference, gates
+ * submit on a non-empty (≤500) note, validates on blur AND on submit, and rests
+ * default focus on Cancel (BR3). Mounted only while a Reject is pending so the
+ * note state resets on each open.
+ */
+function RejectDialog({
+  tx,
+  submitting,
+  onCancel,
+  onConfirm,
+}: {
+  tx: Transaction;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: (note: string) => void;
+}) {
+  // The note value lives in an UNCONTROLLED textarea read via a ref, and the
+  // character counter is updated DIRECTLY in the DOM (counterRef) on input — so a
+  // keystroke triggers NO React re-render of the dialog. The only piece of React
+  // state a keystroke can touch is `hasContent`, and it is set ONLY when the note
+  // crosses the empty ↔ non-empty boundary (which gates the submit control, BR2),
+  // so typing a long (≤500-char) note stays responsive. Validation (`noteError`)
+  // runs on blur AND on submit per BR2 — never on every keystroke.
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  const counterRef = useRef<HTMLSpanElement>(null);
+  const [hasContent, setHasContent] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
+
+  const submitDisabled = submitting || !hasContent;
+
+  function handleInput(value: string) {
+    if (counterRef.current) {
+      counterRef.current.textContent = `${value.length}/${MAX_NOTE_LENGTH}`;
+    }
+    const nowHasContent = value.trim().length > 0;
+    setHasContent((prev) => (prev === nowHasContent ? prev : nowHasContent));
+    if (noteError) setNoteError(validateNote(value));
+  }
+
+  function handleConfirm() {
+    const value = noteRef.current?.value ?? '';
+    const message = validateNote(value);
+    if (message) {
+      setNoteError(message);
+      return;
+    }
+    onConfirm(value);
+  }
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Reject transaction {tx.Reference}?</DialogTitle>
+        <DialogDescription>
+          Rejecting{' '}
+          <span className="text-foreground font-medium">{tx.Reference}</span>{' '}
+          requires a note explaining why. This can&apos;t be undone.
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor="rejection-note"
+          className="text-foreground text-sm font-medium"
+        >
+          Rejection note
+        </label>
+        <textarea
+          id="rejection-note"
+          ref={noteRef}
+          defaultValue=""
+          maxLength={MAX_NOTE_LENGTH}
+          rows={4}
+          aria-invalid={noteError ? true : undefined}
+          aria-describedby="rejection-note-help"
+          onChange={(e) => handleInput(e.target.value)}
+          onBlur={(e) => setNoteError(validateNote(e.target.value))}
+          className="border-input bg-background focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:border-destructive min-h-24 w-full rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-[3px]"
+        />
+        <div
+          id="rejection-note-help"
+          className="flex items-center justify-between text-xs"
+        >
+          <span
+            className={
+              noteError
+                ? 'text-destructive font-medium'
+                : 'text-muted-foreground'
+            }
+          >
+            {noteError ?? 'Add a note to explain why this is being rejected.'}
+          </span>
+          <span ref={counterRef} className="text-muted-foreground tabular-nums">
+            0/{MAX_NOTE_LENGTH}
+          </span>
+        </div>
+      </div>
+
+      <DialogFooter>
+        {/* Dismiss — the safe default; autofocused (BR3). */}
+        <Button type="button" variant="outline" autoFocus onClick={onCancel}>
+          Cancel
+        </Button>
+        {/* Confirm — disabled until a non-empty (≤500) note is entered. */}
+        <Button
+          type="button"
+          variant="destructive"
+          disabled={submitDisabled}
+          onClick={handleConfirm}
+        >
+          {submitting ? 'Rejecting…' : 'Reject transaction'}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
 function TransactionsTable() {
+  // Toast is a non-essential success confirmation; useOptionalToast yields null
+  // when no provider is mounted (an isolated render) so the page never crashes.
+  const toast = useOptionalToast();
+
   const [state, setState] = useState<LoadState>('loading');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  // Resolved for the fail-closed RBAC scaffold later Epic 3 stories build on.
-  // Read here so the wiring is in place; this read-only story renders no
-  // role-gated controls regardless of the value.
-  const [, setRole] = useState<KnownRole | null>(null);
+  // Resolved for the fail-closed RBAC scaffold (Story 1). Story 3 CONSUMES it:
+  // the row-actions render only for an explicitly-resolved Approver. A null role
+  // (Importer / unknown / unresolved source) hides them — fail-closed (BR9).
+  const [role, setRole] = useState<KnownRole | null>(null);
   // Bumping this counter re-runs the fetch effect — the Retry affordance drives
   // it (an event handler), so the loading transition lives in the effect rather
   // than as a synchronous setState in the effect body.
@@ -257,6 +436,16 @@ function TransactionsTable() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   const [pageIndex, setPageIndex] = useState(0);
+
+  // Story 3 review-action state: the pending action (drives the open dialog), an
+  // in-flight flag for the mutation, and the inline mutation-error message (the
+  // role="alert" surface a hard backend failure raises — distinct from the
+  // success toast — NFR5). The Rejection-Note text/validation lives inside the
+  // RejectDialog child so a keystroke re-renders only the note field.
+  const [approveTarget, setApproveTarget] = useState<Transaction | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<Transaction | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Mount + retry fetch. The effect body holds only the async side-effect; state
   // resolves in the promise callbacks (.then/.catch), never synchronously in the
@@ -277,9 +466,9 @@ function TransactionsTable() {
     };
   }, [fetchNonce]);
 
-  // Resolve the current role for the fail-closed RBAC scaffold. A failed resolve
-  // leaves the role null — the read-only baseline already renders no action
-  // controls, so this stays fail-closed for the actions later stories add.
+  // Resolve the current role for the fail-closed RBAC gate (Story 3 consumes it).
+  // A failed resolve leaves the role null — the row-actions then stay hidden, so
+  // the surface fails CLOSED rather than exposing the actions on an unknown role.
   useEffect(() => {
     if (state !== 'ready') return;
     let active = true;
@@ -296,6 +485,95 @@ function TransactionsTable() {
   function handleRetry() {
     setState('loading');
     setFetchNonce((n) => n + 1);
+  }
+
+  // The Approver gate: the row-actions render only for an explicitly-resolved
+  // Approver (fail-closed — an Importer / unknown / unresolved role yields false).
+  const isApprover = role === 'Approver';
+
+  // Open the Approve confirm dialog for a row, clearing any prior inline error.
+  function openApprove(tx: Transaction) {
+    setActionError(null);
+    setApproveTarget(tx);
+  }
+
+  // Open the Reject dialog for a row, clearing any prior inline error.
+  function openReject(tx: Transaction) {
+    setActionError(null);
+    setRejectTarget(tx);
+  }
+
+  // Optimistically flip the targeted row's Status (and, for a reject, its note +
+  // audit trail) in place so the table reflects the new state immediately (R7 /
+  // R8 / BR8). The mutation has already succeeded when this runs.
+  function applyOptimisticFlip(
+    txId: number,
+    patch: Partial<Transaction>,
+  ): void {
+    setTransactions((prev) =>
+      prev.map((tx) => (tx.Id === txId ? { ...tx, ...patch } : tx)),
+    );
+  }
+
+  // Confirm Approve: POST approve with the LastChangedUser audit header, then flip
+  // the row to Approved with a success toast. A hard failure CLOSES the dialog and
+  // surfaces the inline role="alert" error, leaving the row unchanged (NFR5).
+  // Event handler, so the setState calls here are lint-safe.
+  async function handleConfirmApprove(tx: Transaction) {
+    setSubmitting(true);
+    setActionError(null);
+    try {
+      const auditUser = (await fetchCurrentUserIdentity()) ?? 'unknown';
+      await approveTransaction(tx.Id, auditUser);
+      applyOptimisticFlip(tx.Id, { Status: 'Approved' });
+      setApproveTarget(null);
+      toast?.showToast({
+        variant: 'success',
+        title: `Transaction ${tx.Reference} approved`,
+      });
+    } catch {
+      // Hard backend failure: close the dialog (so the inline alert isn't hidden
+      // behind the dialog's aria-hidden focus trap), keep the row Imported, and
+      // fire NO success toast.
+      setApproveTarget(null);
+      setActionError(
+        `We were unable to approve ${tx.Reference}. Please try again.`,
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Confirm Reject: the note is re-validated (submit-time, BR2) inside RejectDialog
+  // before this fires. POST reject with the note body + LastChangedUser header. On
+  // success flip the row to Rejected and record the note + acting user + timestamp
+  // for the read-only trail (BR8), with a success toast. A hard failure closes the
+  // dialog and surfaces the inline role="alert" error, leaving the row unchanged.
+  async function handleConfirmReject(tx: Transaction, note: string) {
+    setSubmitting(true);
+    setActionError(null);
+    try {
+      const auditUser = (await fetchCurrentUserIdentity()) ?? 'unknown';
+      await rejectTransaction(tx.Id, note, auditUser);
+      applyOptimisticFlip(tx.Id, {
+        Status: 'Rejected',
+        UserNote: note,
+        LastChangedUser: auditUser,
+        LastChangedDate: new Date().toISOString(),
+      });
+      setRejectTarget(null);
+      toast?.showToast({
+        variant: 'success',
+        title: `Transaction ${tx.Reference} rejected`,
+      });
+    } catch {
+      setRejectTarget(null);
+      setActionError(
+        `We were unable to reject ${tx.Reference}. Please try again.`,
+      );
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   // The distinct File options for the filter dropdown (option `value` = FileLogId,
@@ -506,6 +784,23 @@ function TransactionsTable() {
             empty-state/table copy already carry the visible framing.
           */}
           <h2 className="sr-only">Transaction records</h2>
+
+          {/*
+            A hard mutation failure (Approve / Reject) surfaces here as the single
+            assertive inline error region (role="alert" — NFR5), distinct from the
+            success toast surface (role="status"). The row's Status is left
+            unchanged when this shows, and the dialog has been closed so this is
+            not buried behind the dialog's aria-hidden focus trap.
+          */}
+          {actionError && (
+            <div
+              role="alert"
+              aria-live="assertive"
+              className="border-destructive/40 bg-destructive/10 text-destructive mb-4 rounded-lg border px-4 py-3 text-sm font-medium"
+            >
+              {actionError}
+            </div>
+          )}
 
           {!hasData ? (
             <EmptyState
@@ -768,30 +1063,97 @@ function TransactionsTable() {
                               </TableHead>
                             );
                           })}
+                          {/* Story 3 actions column — only headed when the Approver
+                              can act, so the read-only Importer/Approved/Rejected
+                              views keep the original eight-column layout. */}
+                          {isApprover && (
+                            <TableHead>
+                              <span className="sr-only">Review actions</span>
+                            </TableHead>
+                          )}
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {pageRows.map((tx) => (
-                          <TableRow key={tx.Id}>
-                            <TableCell className="font-medium">
-                              {tx.Reference}
-                            </TableCell>
-                            <TableCell>
-                              {formatTransactionDate(tx.TransactionDate)}
-                            </TableCell>
-                            <TableCell>{tx.AccountNumber}</TableCell>
-                            <TableCell>{tx.Description}</TableCell>
-                            <TableCell className="tabular-nums">
-                              {formatAmount(tx.Amount)}
-                            </TableCell>
-                            <TableCell>{tx.Currency}</TableCell>
-                            {/* §13-D: render the raw TransactionType value (format unresolved). */}
-                            <TableCell>{tx.TransactionType}</TableCell>
-                            <TableCell>
-                              <StatusBadge status={tx.Status} />
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                        {pageRows.map((tx) => {
+                          const isImported = tx.Status === IMPORTED_STATUS;
+                          const isRejected = tx.Status === 'Rejected';
+                          return (
+                            <TableRow key={tx.Id}>
+                              <TableCell className="font-medium">
+                                {tx.Reference}
+                              </TableCell>
+                              <TableCell>
+                                {formatTransactionDate(tx.TransactionDate)}
+                              </TableCell>
+                              <TableCell>{tx.AccountNumber}</TableCell>
+                              <TableCell>
+                                {tx.Description}
+                                {/*
+                                  BR8: a Rejected row surfaces its note + who
+                                  rejected it and when, READ-ONLY (no editable
+                                  control remains). Rendered inline beneath the
+                                  description so the trail travels with the row.
+                                */}
+                                {isRejected && tx.UserNote && (
+                                  <span className="text-muted-foreground mt-1 block text-xs">
+                                    <span className="font-medium">
+                                      Rejection note:
+                                    </span>{' '}
+                                    {tx.UserNote}
+                                    {tx.LastChangedUser && (
+                                      <>
+                                        {' '}
+                                        — rejected by {tx.LastChangedUser}
+                                        {tx.LastChangedDate &&
+                                          ` on ${formatTransactionDate(
+                                            tx.LastChangedDate,
+                                          )}`}
+                                      </>
+                                    )}
+                                  </span>
+                                )}
+                              </TableCell>
+                              <TableCell className="tabular-nums">
+                                {formatAmount(tx.Amount)}
+                              </TableCell>
+                              <TableCell>{tx.Currency}</TableCell>
+                              {/* §13-D: render the raw TransactionType value (format unresolved). */}
+                              <TableCell>{tx.TransactionType}</TableCell>
+                              <TableCell>
+                                <StatusBadge status={tx.Status} />
+                              </TableCell>
+                              {/*
+                                Approver-only review actions, visible only on an
+                                Imported row (BR1 — hidden, not disabled, on
+                                Approved/Rejected). Absent entirely for a
+                                non-Approver (BR9, fail-closed).
+                              */}
+                              {isApprover && (
+                                <TableCell>
+                                  {isImported && (
+                                    <div className="flex items-center gap-2">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        onClick={() => openApprove(tx)}
+                                      >
+                                        Approve
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => openReject(tx)}
+                                      >
+                                        Reject
+                                      </Button>
+                                    </div>
+                                  )}
+                                </TableCell>
+                              )}
+                            </TableRow>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </div>
@@ -832,6 +1194,78 @@ function TransactionsTable() {
           )}
         </section>
       )}
+
+      {/*
+        Approve confirmation modal (BR3): names the Reference, the primary confirm
+        is destructive-styled, and default focus rests on Cancel so an accidental
+        Enter never approves. Mounted only while an Approve action is pending.
+      */}
+      <Dialog
+        open={approveTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setApproveTarget(null);
+        }}
+      >
+        <DialogContent>
+          {approveTarget && (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  Approve transaction {approveTarget.Reference}?
+                </DialogTitle>
+                <DialogDescription>
+                  This marks{' '}
+                  <span className="text-foreground font-medium">
+                    {approveTarget.Reference}
+                  </span>{' '}
+                  as Approved. This can&apos;t be undone.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                {/* Dismiss — the safe default; autofocused (BR3). */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  autoFocus
+                  onClick={() => setApproveTarget(null)}
+                >
+                  Cancel
+                </Button>
+                {/* Destructive confirm — commits the approval. */}
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={submitting}
+                  onClick={() => handleConfirmApprove(approveTarget)}
+                >
+                  {submitting ? 'Approving…' : 'Approve'}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/*
+        Reject modal (BR2 / BR3) — its own component so a note keystroke re-renders
+        only the dialog, not the table. Mounted only while a Reject is pending so
+        the note state resets on each open.
+      */}
+      <Dialog
+        open={rejectTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRejectTarget(null);
+        }}
+      >
+        {rejectTarget && (
+          <RejectDialog
+            tx={rejectTarget}
+            submitting={submitting}
+            onCancel={() => setRejectTarget(null)}
+            onConfirm={(note) => handleConfirmReject(rejectTarget, note)}
+          />
+        )}
+      </Dialog>
     </main>
   );
 }

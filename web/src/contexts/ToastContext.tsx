@@ -25,7 +25,9 @@ import {
  * Create the Toast Context with undefined default value
  * This forces consumers to use the context within a provider
  */
-const ToastContext = createContext<ToastContextValue | undefined>(undefined);
+export const ToastContext = createContext<ToastContextValue | undefined>(
+  undefined,
+);
 
 /**
  * ToastProvider - Context provider component
@@ -151,4 +153,17 @@ export function useToast(): ToastContextValue {
   }
 
   return context;
+}
+
+/**
+ * useOptionalToast - Like useToast, but returns null instead of throwing when no
+ * ToastProvider is present. For surfaces that fire toasts as a non-essential
+ * confirmation (e.g. the Transactions review actions) and may be rendered in
+ * isolation (integration tests render a page without the app-wide provider from
+ * layout.tsx). Production always wraps the tree in ToastProvider, so callers get
+ * the real context there; in a provider-less render they degrade gracefully
+ * rather than crashing the page.
+ */
+export function useOptionalToast(): ToastContextValue | null {
+  return useContext(ToastContext) ?? null;
 }
