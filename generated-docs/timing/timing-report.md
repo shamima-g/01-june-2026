@@ -9,32 +9,32 @@
 | Metric | Value |
 |---|---|
 | First event | 2026-06-02T02:55:32.9397164Z |
-| Last event | 2026-06-04T10:16:50.3880906Z |
-| Total wall-clock | 55h 21m 17s |
-| Manual-intervention time (excluded) | 29h 33m 18s |
-| &nbsp;&nbsp;— of which permission-approval waits | 8h 39m 24s |
-| **Active build time** | **25h 47m 59s** |
-| Recorded events | 647 |
+| Last event | 2026-06-04T11:15:49.2033347Z |
+| Total wall-clock | 56h 20m 16s |
+| Manual-intervention time (excluded) | 29h 51m 46s |
+| &nbsp;&nbsp;— of which permission-approval waits | 8h 56m 47s |
+| **Active build time** | **26h 28m 30s** |
+| Recorded events | 670 |
 
 ## Active time by phase (macro)
 
 | Phase | Active time | % of active |
 |---|---|---|
 | INTAKE | 14m 35s | 1% |
-| PLAN | 31m 35s | 2% |
-| BUILD | 24h 45m 20s | 96% |
-| COMPLETE | 13m 18s | 1% |
+| PLAN | 37m 52s | 2% |
+| BUILD | 25h 5m 40s | 95% |
+| COMPLETE | 27m 11s | 2% |
 | UNKNOWN | 3m 12s | 0% |
 
 ## Active time by sub-phase (granular — from agent spans)
 
 | Sub-phase | Active time | Runs |
 |---|---|---|
-| development | 73h 53m 43s | 35 |
-| planning | 43h 24m 22s | 7 |
-| test-generation | 3h 11m 10s | 45 |
-| review | 2h 12m 20s | 31 |
-| e2e | 37m 47s | 31 |
+| development | 77h 12m | 36 |
+| planning | 49h 9m 30s | 9 |
+| test-generation | 3h 25m 4s | 48 |
+| review | 2h 16m 52s | 32 |
+| e2e | 37m 57s | 32 |
 | intake | 9m 21s | 3 |
 
 ## BUILD time per story — build vs debug
@@ -64,8 +64,9 @@
 | epic-4/story-1 | 14m 11s | 1h 45m 43s | 1m 54s | — | ~est (spans) |
 | epic-4/story-2 | 44m 23s | 2h 9m 33s | 9m 43s | 0 | ~est (spans) |
 | epic-4/story-3 | 54m 4s | 1h 5m 6s | 2h 26m 20s | 2 | ~est (spans) |
-| epic-4/story-4 | 20m 55s | 6m 37s | 5m 54s | 1 | ~est (spans) |
+| epic-4/story-4 | 20m 55s | 3h 24m 54s | 5m 54s | 1 | ~est (spans) |
 | epic-4/story-5 | 34m 40s | 7m 35s | 6m 41s | 1 | ~est (spans) |
+| epic-5/story-1 | 20m 20s | 20m 20s | 0s | 0 | cycle-tagged |
 
 _`~est (spans)` rows split by agent-span re-runs, so Build+Debug may not
 equal the interval-based Active total. Stories built after `cycle` tagging
@@ -103,6 +104,8 @@ Wall-clock spans between phase transitions recorded in `state.history[]`
 | COMPLETE | 1h 12m 36s |
 | COMPLETE | 19m 52s |
 | COMPLETE | 50m 46s |
+| COMPLETE | 1h 58m 41s |
+| BUILD | 21m 58s |
 
 ---
 
