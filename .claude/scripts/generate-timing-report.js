@@ -92,7 +92,9 @@ function analyze(events) {
     activeMs: 0,
     byPhase: {},          // phase → active ms
     byAgentSubphase: {},  // sub-phase → { ms, count }
-    byStory: {},          // "epic-N/story-M" → active ms
+    byStory: {},          // "epic-N/story-M" → active ms (interval-based total)
+    byStoryCycle: {},     // "epic-N/story-M" → { build, debug, tagged } (A: from cycle tags)
+    byStorySpan: {},      // "epic-N/story-M" → { build, debug } (B: span-based estimate)
     agentSpans: 0,
     firstTs: null,
     lastTs: null,
@@ -121,20 +123,40 @@ function analyze(events) {
       if (cur.phase === 'BUILD' && cur.epic && cur.story) {
         const key = `epic-${cur.epic}/story-${cur.story}`;
         result.byStory[key] = (result.byStory[key] || 0) + dur;
+        // A — split build vs debug from the cycle tag the hook stamps. A numeric
+        // cycle >= 2 is a fix cycle (debugging); cycle 1 (or an untagged interval)
+        // counts toward the initial build. A story is "tagged" once any of its
+        // BUILD intervals carry a numeric cycle.
+        const c = result.byStoryCycle[key] || { build: 0, debug: 0, tagged: false };
+        const cyc = typeof cur.cycle === 'number' ? cur.cycle : null;
+        if (cyc !== null) {
+          c.tagged = true;
+          if (cyc >= 2) c.debug += dur;
+          else c.build += dur;
+        } else {
+          c.build += dur;
+        }
+        result.byStoryCycle[key] = c;
       }
     }
   }
 
   // Granular per-agent spans (start → matching stop, FIFO per agent name).
+  // The stack holds the START event (not just its time) so each span can be
+  // attributed to the story it ran under.
   const open = {};
+  // B — per-story span occurrence counter: the 1st span of a given agent role in a
+  // story is the initial build/verify; 2nd+ spans of that role are fix-cycle re-runs
+  // (debugging). This is the span-based estimate used when no cycle tag is present.
+  const spanOcc = {};
   for (const e of events) {
     if (e.event === 'subagent_start') {
-      (open[e.agent] = open[e.agent] || []).push(e._t);
+      (open[e.agent] = open[e.agent] || []).push(e);
     } else if (e.event === 'subagent_stop') {
       const stack = open[e.agent];
       if (stack && stack.length) {
-        const startT = stack.shift();
-        const dur = e._t - startT;
+        const startEv = stack.shift();
+        const dur = e._t - startEv._t;
         if (dur > 0) {
           const sub = AGENT_SUBPHASE[e.agent] || (e.agent || 'unknown');
           const bucket = result.byAgentSubphase[sub] || { ms: 0, count: 0 };
@@ -142,6 +164,16 @@ function analyze(events) {
           bucket.count += 1;
           result.byAgentSubphase[sub] = bucket;
           result.agentSpans += 1;
+
+          if (startEv.phase === 'BUILD' && startEv.epic && startEv.story) {
+            const key = `epic-${startEv.epic}/story-${startEv.story}`;
+            const okey = `${key}::${e.agent}`;
+            spanOcc[okey] = (spanOcc[okey] || 0) + 1;
+            const sp = result.byStorySpan[key] || { build: 0, debug: 0 };
+            if (spanOcc[okey] === 1) sp.build += dur;
+            else sp.debug += dur;
+            result.byStorySpan[key] = sp;
+          }
         }
       }
     }
@@ -160,6 +192,31 @@ function readStateHistory() {
   }
 }
 
+function readFixCycleCounts() {
+  // Per-story fix-cycle counts the orchestrator persists on each story record
+  // (e2eFixCycleCount). Keyed "epic-N/story-M" to align with byStory.
+  if (!fs.existsSync(STATE_PATH)) return {};
+  const counts = {};
+  try {
+    const state = JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
+    const epics = state.epics || {};
+    for (const ek of Object.keys(epics)) {
+      const ep = epics[ek];
+      const idx = ep && ep.index != null ? ep.index : ek;
+      const stories = (ep && ep.stories) || [];
+      for (const s of stories) {
+        if (!s || s.index == null) continue;
+        if (typeof s.e2eFixCycleCount === 'number') {
+          counts[`epic-${idx}/story-${s.index}`] = s.e2eFixCycleCount;
+        }
+      }
+    }
+  } catch {
+    // best-effort
+  }
+  return counts;
+}
+
 function phaseDurationsFromHistory(history) {
   // Macro cross-check: time between phase-transition timestamps in state.history.
   if (!history || history.length === 0) return null;
@@ -174,7 +231,7 @@ function phaseDurationsFromHistory(history) {
   return rows;
 }
 
-function buildReport(a, historyRows) {
+function buildReport(a, historyRows, fixCounts) {
   const lines = [];
   lines.push('# Build Timing Report');
   lines.push('');
@@ -225,12 +282,50 @@ function buildReport(a, historyRows) {
 
   const storyKeys = Object.keys(a.byStory).sort();
   if (storyKeys.length) {
-    lines.push('## BUILD active time per story');
+    const fc = fixCounts || {};
+    let anyEst = false;
+    lines.push('## BUILD time per story — build vs debug');
     lines.push('');
-    lines.push('| Story | Active time |');
-    lines.push('|---|---|');
-    for (const k of storyKeys) lines.push(`| ${k} | ${fmt(a.byStory[k])} |`);
+    lines.push('> "Debug" = fix-cycle work after the first build+verify round. When events');
+    lines.push('> carry a `cycle` tag (cycle ≥ 2 ⇒ debugging) the split is exact; older');
+    lines.push('> stories with no tag fall back to a span-based estimate (2nd+ run of an');
+    lines.push('> agent in a story = a re-run), marked `~est`.');
     lines.push('');
+    lines.push('| Story | Active total | Build | Debug | Fix cycles | Basis |');
+    lines.push('|---|---|---|---|---|---|');
+    for (const k of storyKeys) {
+      const total = a.byStory[k] || 0;
+      const cyc = a.byStoryCycle[k];
+      const span = a.byStorySpan[k];
+      let build;
+      let debug;
+      let basis;
+      if (cyc && cyc.tagged) {
+        build = cyc.build;
+        debug = cyc.debug;
+        basis = 'cycle-tagged';
+      } else if (span) {
+        build = span.build;
+        debug = span.debug;
+        basis = '~est (spans)';
+        anyEst = true;
+      } else {
+        build = total;
+        debug = 0;
+        basis = '—';
+      }
+      const fixN = Object.prototype.hasOwnProperty.call(fc, k) ? String(fc[k]) : '—';
+      lines.push(
+        `| ${k} | ${fmt(total)} | ${fmt(build)} | ${fmt(debug)} | ${fixN} | ${basis} |`
+      );
+    }
+    lines.push('');
+    if (anyEst) {
+      lines.push('_`~est (spans)` rows split by agent-span re-runs, so Build+Debug may not');
+      lines.push('equal the interval-based Active total. Stories built after `cycle` tagging');
+      lines.push('was added report an exact split._');
+      lines.push('');
+    }
   }
 
   lines.push('## Cross-check vs workflow-state.json history');
@@ -260,7 +355,8 @@ function main() {
   const events = readLedger();
   const analysis = analyze(events);
   const historyRows = phaseDurationsFromHistory(readStateHistory());
-  const report = buildReport(analysis, historyRows);
+  const fixCounts = readFixCycleCounts();
+  const report = buildReport(analysis, historyRows, fixCounts);
 
   fs.mkdirSync(path.dirname(REPORT_PATH), { recursive: true });
   fs.writeFileSync(REPORT_PATH, report);

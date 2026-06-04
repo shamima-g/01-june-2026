@@ -9,12 +9,12 @@
 | Metric | Value |
 |---|---|
 | First event | 2026-06-02T02:55:32.9397164Z |
-| Last event | 2026-06-04T08:50:18.9292225Z |
-| Total wall-clock | 53h 54m 46s |
-| Manual-intervention time (excluded) | 28h 20m 5s |
-| &nbsp;&nbsp;— of which permission-approval waits | 8h 15m 58s |
-| **Active build time** | **25h 34m 41s** |
-| Recorded events | 588 |
+| Last event | 2026-06-04T10:16:50.3880906Z |
+| Total wall-clock | 55h 21m 17s |
+| Manual-intervention time (excluded) | 29h 33m 18s |
+| &nbsp;&nbsp;— of which permission-approval waits | 8h 39m 24s |
+| **Active build time** | **25h 47m 59s** |
+| Recorded events | 647 |
 
 ## Active time by phase (macro)
 
@@ -22,7 +22,8 @@
 |---|---|---|
 | INTAKE | 14m 35s | 1% |
 | PLAN | 31m 35s | 2% |
-| BUILD | 24h 45m 20s | 97% |
+| BUILD | 24h 45m 20s | 96% |
+| COMPLETE | 13m 18s | 1% |
 | UNKNOWN | 3m 12s | 0% |
 
 ## Active time by sub-phase (granular — from agent spans)
@@ -36,30 +37,39 @@
 | e2e | 37m 47s | 31 |
 | intake | 9m 21s | 3 |
 
-## BUILD active time per story
+## BUILD time per story — build vs debug
 
-| Story | Active time |
-|---|---|
-| epic-1/story-1 | 20m 8s |
-| epic-1/story-2 | 33m 20s |
-| epic-1/story-3 | 21m 14s |
-| epic-1/story-4 | 30m 55s |
-| epic-1/story-5 | 19m 54s |
-| epic-2/story-1 | 45m 28s |
-| epic-2/story-2 | 26m 15s |
-| epic-2/story-3 | 1h 11m 41s |
-| epic-2/story-4 | 23m 30s |
-| epic-2/story-5 | 27m 19s |
-| epic-3/story-1 | 37m 10s |
-| epic-3/story-2 | 55m 33s |
-| epic-3/story-3 | 13h 57m 58s |
-| epic-3/story-4 | 27m 24s |
-| epic-3/story-5 | 39m 14s |
-| epic-4/story-1 | 14m 11s |
-| epic-4/story-2 | 44m 23s |
-| epic-4/story-3 | 54m 4s |
-| epic-4/story-4 | 20m 55s |
-| epic-4/story-5 | 34m 40s |
+> "Debug" = fix-cycle work after the first build+verify round. When events
+> carry a `cycle` tag (cycle ≥ 2 ⇒ debugging) the split is exact; older
+> stories with no tag fall back to a span-based estimate (2nd+ run of an
+> agent in a story = a re-run), marked `~est`.
+
+| Story | Active total | Build | Debug | Fix cycles | Basis |
+|---|---|---|---|---|---|
+| epic-1/story-1 | 20m 8s | 7m 37s | 17m 21s | — | ~est (spans) |
+| epic-1/story-2 | 33m 20s | 18m 6s | 31m 26s | — | ~est (spans) |
+| epic-1/story-3 | 21m 14s | 2h 41m 27s | 2m 37s | 0 | ~est (spans) |
+| epic-1/story-4 | 30m 55s | 14m 55s | 27m 36s | 1 | ~est (spans) |
+| epic-1/story-5 | 19m 54s | 14m 7s | 4m 37s | — | ~est (spans) |
+| epic-2/story-1 | 45m 28s | 19m 19s | 20m 1s | — | ~est (spans) |
+| epic-2/story-2 | 26m 15s | 18m 51s | 5m 56s | 1 | ~est (spans) |
+| epic-2/story-3 | 1h 11m 41s | 20h 23m 45s | 2h 44m 23s | 2 | ~est (spans) |
+| epic-2/story-4 | 23m 30s | 41m 57s | 6m 58s | 0 | ~est (spans) |
+| epic-2/story-5 | 27m 19s | 1h 4m 54s | 6m 1s | 0 | ~est (spans) |
+| epic-3/story-1 | 37m 10s | 30m 7s | 1h 19m 52s | 1 | ~est (spans) |
+| epic-3/story-2 | 55m 33s | 53m 31s | 1h 37m 9s | 2 | ~est (spans) |
+| epic-3/story-3 | 13h 57m 58s | 14h 32m 24s | 15h 3m 12s | 2 | ~est (spans) |
+| epic-3/story-4 | 27m 24s | 1h 52m 20s | 2m 36s | 0 | ~est (spans) |
+| epic-3/story-5 | 39m 14s | 1h 55m 28s | 2h 51m 20s | 0 | ~est (spans) |
+| epic-4/story-1 | 14m 11s | 1h 45m 43s | 1m 54s | — | ~est (spans) |
+| epic-4/story-2 | 44m 23s | 2h 9m 33s | 9m 43s | 0 | ~est (spans) |
+| epic-4/story-3 | 54m 4s | 1h 5m 6s | 2h 26m 20s | 2 | ~est (spans) |
+| epic-4/story-4 | 20m 55s | 6m 37s | 5m 54s | 1 | ~est (spans) |
+| epic-4/story-5 | 34m 40s | 7m 35s | 6m 41s | 1 | ~est (spans) |
+
+_`~est (spans)` rows split by agent-span re-runs, so Build+Debug may not
+equal the interval-based Active total. Stories built after `cycle` tagging
+was added report an exact split._
 
 ## Cross-check vs workflow-state.json history
 

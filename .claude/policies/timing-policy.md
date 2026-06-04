@@ -70,6 +70,30 @@ subtracted and also broken out as its own line in the report summary. To keep th
 ledger lean, `PreToolUse` is only recorded when it directly resolves a pending
 permission prompt — not for every tool call.
 
+## Build vs debug time per story
+
+The report splits each story's BUILD time into **build** (the initial build + first
+verify round) and **debug** (fix-cycle work after that — the Step B6 developer
+re-invocations and their re-runs of `playwright-runner` / `code-reviewer`, plus
+Step B7.1 manual-test fixes). Two mechanisms, preferring the precise one:
+
+1. **Cycle tag (precise — "from now on").** The orchestrator writes `currentCycle`
+   to `workflow-state.json` at each build/fix-cycle start (`1` at Step B3, `2`/`3`
+   at Step B6; reset to `1` when BUILD moves to the next story). `record-timing.ps1`
+   stamps `cycle` on every ledger event. The report attributes each BUILD interval
+   with `cycle >= 2` to **debug**, `cycle 1` to **build** — an exact, interval-based
+   split consistent with the active-time totals.
+2. **Span-based estimate (fallback — retroactive).** For stories recorded before the
+   cycle tag existed (no `cycle` on their events), the report estimates debug time
+   from agent spans: the 1st span of a given agent role in a story is the initial
+   build/verify; 2nd+ spans of that role are fix-cycle re-runs. These rows are marked
+   `~est (spans)` and may not sum exactly to the interval-based Active total (span
+   sums vs gap-based intervals — the same caveat as the sub-phase table).
+
+This appears in the report's **"BUILD time per story — build vs debug"** table, with
+a per-story fix-cycle count read from each story's `e2eFixCycleCount` in
+`workflow-state.json`.
+
 ## Manual fallback (only if the hook is unavailable)
 
 If timing hooks are disabled or a non-hooked environment is in use, Claude maintains

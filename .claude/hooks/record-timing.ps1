@@ -63,6 +63,12 @@ try {
     $epic = $null
     $story = $null
     $phaseStatus = $null
+    # currentCycle: the build/fix-cycle number the orchestrator is currently running
+    # for this story (1 = initial build, >=2 = a fix cycle / debugging). The report
+    # uses it to split per-story BUILD time into "build" vs "debug". Null when the
+    # orchestrator hasn't set it (older runs) — the report then falls back to a
+    # span-based estimate.
+    $cycle = $null
     $stateFile = Join-Path $projectPath 'generated-docs\context\workflow-state.json'
     if (Test-Path $stateFile) {
         try {
@@ -71,6 +77,7 @@ try {
             $epic = $state.currentEpic
             $story = $state.currentStory
             $phaseStatus = $state.phaseStatus
+            $cycle = $state.currentCycle
         } catch { }
     }
 
@@ -99,6 +106,7 @@ try {
         phase       = $phase
         epic        = $epic
         story       = $story
+        cycle       = $cycle
         phaseStatus = $phaseStatus
         agent       = $agent
         session     = $shortSession

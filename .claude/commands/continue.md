@@ -299,6 +299,8 @@ testPaths: [<vitest paths>, <playwright path>]
 cycleNumber: 1
 ```
 
+**Timing — cycle tag.** Before launching the developer for the initial build, set `currentCycle: 1` on the root of `generated-docs/context/workflow-state.json`. The `record-timing.ps1` hook stamps this onto every ledger event so the timing report can split each story's BUILD time into **build** (cycle 1) vs **debug** (cycle ≥ 2). See [timing-policy.md](../policies/timing-policy.md).
+
 The agent reads `project-brief.md`, reads `prototype-src/<route>/` when available, reads `generated-docs/context/api-shape-report.md` when it exists, implements code, runs `npm --prefix web test -- --run`, returns `DEVELOPER COMPLETE` or `HALT` or `DEVELOPER UNABLE TO RESOLVE`.
 
 **On `HALT`:** surface the halt block verbatim to the user with `AskUserQuestion`. Resume BUILD with the user's chosen option as additional context in a re-invocation.
@@ -401,6 +403,8 @@ priorFailures: {
   codeReview: <findings from code-reviewer if fix-cycle-needed>
 }
 ```
+
+**Timing — cycle tag.** Before re-invoking the developer, set `currentCycle` on `generated-docs/context/workflow-state.json` to this fix-cycle number (`2`, then `3`). All ledger events recorded during the fix cycle are then attributed to **debug** time for the story (cycle ≥ 2). The same applies when re-entering this step from a manual-test-gate fix (Step B7.1). When the story commits and BUILD moves to the next story (Step B1), reset `currentCycle: 1`.
 
 After developer returns, re-fire the parallel playwright-runner + code-reviewer per Step B4.
 
