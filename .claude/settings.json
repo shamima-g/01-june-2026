@@ -46,7 +46,18 @@
       "Bash(npx playwright install*)",
       "Bash(npx playwright --version)",
       "Bash(npm run test:e2e*)",
-      "Bash(node .claude/scripts/*.js*)"
+      "Bash(node .claude/scripts/*.js*)",
+      "Edit(.claude/**)",
+      "Edit(**/.claude/**)",
+      "Write(.claude/**)",
+      "Write(**/.claude/**)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(npm --prefix web test*)",
+      "Bash(npm --prefix web run lint*)",
+      "Bash(npm --prefix web run build*)",
+      "Bash(npm --prefix web run dev*)"
     ]
   },
   "hooks": {
