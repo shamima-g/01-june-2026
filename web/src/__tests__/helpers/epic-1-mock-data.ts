@@ -8,6 +8,18 @@
  *
  * Created by Epic 1 Story 1's test-generator. Subsequent stories import and
  * extend — never duplicate.
+ *
+ * ROLE DISPLAY-NAMES (Epic 5 Story 1, project-brief "Extension — 2026-06-04"):
+ * the LIVE backend returns role *display-names*, not the app's canonical
+ * shorthand — "File Importer" for importers and "Approver" for approvers
+ * (confirmed via GET /v1/auth/userinfo and GET /v1/users). To make this suite
+ * exercise the PRODUCTION shape, the role factories below emit those real
+ * display-names: a caller asking for the canonical Importer identity now gets
+ * "File Importer" on the wire (RolesString + Roles[].Name), while the Approver
+ * stays "Approver" (it already matches the backend). The app's role resolver is
+ * responsible for aliasing these back to canonical KnownRole values — until that
+ * alias lands, role-resolution tests fed by these factories go RED, which is the
+ * intended TDD-red signal for the bug fix.
  */
 
 export interface MockTransaction {
@@ -72,6 +84,25 @@ export const createUsersEnvelope = (
  * ------------------------------------------------------------------ */
 
 /**
+ * Canonical shorthand → real backend role display-name (project-brief
+ * "Extension — 2026-06-04"). Tests address roles by the app's canonical names
+ * ("Importer" / "Approver"), but the factories emit what the LIVE backend
+ * actually returns so the suite reflects production. Unmapped values pass through
+ * unchanged (so partial/unknown-role payloads can still be modelled).
+ *
+ * - Importer → "File Importer"  (the backend's display-name; currently
+ *   unrecognised by roles.ts → the bug under repair)
+ * - Approver → "Approver"       (already matches the backend exactly)
+ */
+const BACKEND_ROLE_DISPLAY_NAME: Record<string, string> = {
+  Importer: 'File Importer',
+  Approver: 'Approver',
+};
+
+const toBackendRoleName = (role: string): string =>
+  BACKEND_ROLE_DISPLAY_NAME[role] ?? role;
+
+/**
  * A single role record as the auth backend returns it within UserInfoRead /
  * RoleRead (auth-api.yaml components.schemas.RoleRead). The role name drives
  * post-login routing.
@@ -102,21 +133,27 @@ export interface MockUserInfo {
 /**
  * Builds the resolved-user payload for a given role. `RolesString` and the
  * `Roles[]` array agree on the role name so a resolver reading either field
- * lands on the same answer. Pass `role` to flip between Importer / Approver;
- * omit fields via `overrides` to model partial/unknown-role responses.
+ * lands on the same answer. Pass the app's canonical `role` ("Importer" /
+ * "Approver") to flip personas; the factory emits the REAL backend display-name
+ * on the wire (see `BACKEND_ROLE_DISPLAY_NAME`) so the payload matches
+ * production. Omit fields via `overrides` to model partial/unknown-role
+ * responses.
  */
 export const createMockUserInfo = (
   role: string,
   overrides: Partial<MockUserInfo> = {},
-): MockUserInfo => ({
-  Id: 7,
-  Email: `${role.toLowerCase()}@example.com`,
-  FirstName: 'Sam',
-  LastName: 'Operator',
-  RolesString: role,
-  Roles: [{ Id: 1, Name: role }],
-  ...overrides,
-});
+): MockUserInfo => {
+  const backendName = toBackendRoleName(role);
+  return {
+    Id: 7,
+    Email: `${role.toLowerCase()}@example.com`,
+    FirstName: 'Sam',
+    LastName: 'Operator',
+    RolesString: backendName,
+    Roles: [{ Id: 1, Name: backendName }],
+    ...overrides,
+  };
+};
 
 /**
  * The login endpoint returns a PascalCase `DefaultResponse` envelope

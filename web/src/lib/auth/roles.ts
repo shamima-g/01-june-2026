@@ -56,24 +56,54 @@ export const LANDING_ROUTES: Record<KnownRole, string> = {
 export const FALLBACK_LANDING_ROUTE: string = LANDING_ROUTES.Approver;
 
 /**
+ * Tolerant alias from the backend's role DISPLAY-NAMES to the canonical
+ * `KnownRole` (project-brief "Extension — 2026-06-04"). The live backend returns
+ * "File Importer" for importers (not the bare "Importer") via
+ * `GET /v1/auth/userinfo` and `GET /v1/users`; "Approver" already matches. Keys
+ * are pre-normalised (trimmed + lowercased) so `normalizeRole` resolves with a
+ * single lookup. The canonical shorthand maps to itself so existing canonical
+ * inputs keep working. New backend spellings are added in ONE place — here.
+ */
+const ROLE_ALIASES: Record<string, KnownRole> = {
+  'file importer': 'Importer',
+  importer: 'Importer',
+  approver: 'Approver',
+};
+
+/**
+ * Normalises an arbitrary backend role name to the canonical `KnownRole`, or
+ * `null` when unrecognised / missing. Case-insensitive and whitespace-tolerant
+ * (the backend payload is not guaranteed to be exactly cased or untrimmed) and
+ * never throws. This is the single boundary where backend display-names are
+ * aliased back to canonical roles, so every caller of `asKnownRole` /
+ * `resolveLandingRoute` inherits the behaviour without changes.
+ */
+export function normalizeRole(
+  raw: string | null | undefined,
+): KnownRole | null {
+  if (!raw) return null;
+  return ROLE_ALIASES[raw.trim().toLowerCase()] ?? null;
+}
+
+/**
  * Maps a resolved role name to its landing route, falling back safely for an
- * unknown / missing role. Pure and source-agnostic — the contract later epics
- * depend on.
+ * unknown / missing role. Tolerant of the backend's display-names via
+ * `normalizeRole`. Pure and source-agnostic — the contract later epics depend
+ * on.
  */
 export function resolveLandingRoute(role: string | null | undefined): string {
-  if (role && role in LANDING_ROUTES) {
-    return LANDING_ROUTES[role as KnownRole];
-  }
-  return FALLBACK_LANDING_ROUTE;
+  const known = normalizeRole(role);
+  return known ? LANDING_ROUTES[known] : FALLBACK_LANDING_ROUTE;
 }
 
 /**
  * Narrows an arbitrary string to a known role, or `null` when unrecognised.
  * Lets callers RBAC-gate UI affordances against the canonical role set without
- * re-declaring it (e.g. "show the Upload CTA only for an Importer").
+ * re-declaring it (e.g. "show the Upload CTA only for an Importer"). Tolerant of
+ * the backend's display-names ("File Importer" → 'Importer') via `normalizeRole`.
  */
 export function asKnownRole(role: string | null | undefined): KnownRole | null {
-  return role && role in LANDING_ROUTES ? (role as KnownRole) : null;
+  return normalizeRole(role);
 }
 
 /**

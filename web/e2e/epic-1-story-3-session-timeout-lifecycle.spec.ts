@@ -48,8 +48,17 @@ function userRecord(user: TestUser) {
     Email: user.email,
     FirstName: user.firstName,
     LastName: user.lastName,
-    RolesString: user.role,
-    Roles: [{ Id: user.role === 'Importer' ? 1 : 2, Name: user.role }],
+    // Emit the PRODUCTION role NAME on the wire: the live backend returns the
+    // Importer as 'File Importer' (the Approver as 'Approver'). The bare
+    // TestUser.role stays the test-logic discriminator; only the emitted name is
+    // mapped here (Epic 5 Story 1 — role-name realism).
+    RolesString: user.role === 'Importer' ? 'File Importer' : 'Approver',
+    Roles: [
+      {
+        Id: user.role === 'Importer' ? 1 : 2,
+        Name: user.role === 'Importer' ? 'File Importer' : 'Approver',
+      },
+    ],
     Pages: [],
     LastChangedUser: 'system',
     LastChangedDate: '2026-06-01T08:00:00Z',
