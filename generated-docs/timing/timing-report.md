@@ -9,12 +9,12 @@
 | Metric | Value |
 |---|---|
 | First event | 2026-06-02T02:55:32.9397164Z |
-| Last event | 2026-06-04T11:15:49.2033347Z |
-| Total wall-clock | 56h 20m 16s |
-| Manual-intervention time (excluded) | 29h 51m 46s |
-| &nbsp;&nbsp;— of which permission-approval waits | 8h 56m 47s |
-| **Active build time** | **26h 28m 30s** |
-| Recorded events | 670 |
+| Last event | 2026-06-05T06:24:10.7185149Z |
+| Total wall-clock | 75h 28m 38s |
+| Manual-intervention time (excluded) | 48h 57m 30s |
+| &nbsp;&nbsp;— of which permission-approval waits | 9h 9m 16s |
+| **Active build time** | **26h 31m 7s** |
+| Recorded events | 688 |
 
 ## Active time by phase (macro)
 
@@ -23,7 +23,7 @@
 | INTAKE | 14m 35s | 1% |
 | PLAN | 37m 52s | 2% |
 | BUILD | 25h 5m 40s | 95% |
-| COMPLETE | 27m 11s | 2% |
+| COMPLETE | 29m 49s | 2% |
 | UNKNOWN | 3m 12s | 0% |
 
 ## Active time by sub-phase (granular — from agent spans)
